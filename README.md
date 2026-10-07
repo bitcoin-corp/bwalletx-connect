@@ -4,7 +4,7 @@ Add "Sign in with bWalletX" to a website.
 
 The user's wallet signs a one-time challenge from your server with a key derived from its identity key. Your server checks the signature and signs the user in as that identity key. You don't need an API key or an account with us, and nothing passes through bwalletx.com. The only service of ours involved is the encrypted pairing relay (`relay.bwallet.space`), and only when the user signs in from a phone or the web wallet.
 
-The full protocol is described at https://bwalletx.com/login.md. This package is the same code, packaged.
+The full protocol is described at https://bwalletx.com/connect.md. This package is the same code, packaged.
 
 ## Install
 
