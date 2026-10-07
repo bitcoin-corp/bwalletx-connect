@@ -1,0 +1,72 @@
+{
+  "name": "@bwalletx/connect",
+  "version": "0.1.0",
+  "description": "Sign in with bWalletX: wallet discovery, phone pairing and server-side challenge verification",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./server": {
+      "import": {
+        "types": "./dist/server.d.ts",
+        "default": "./dist/server.js"
+      },
+      "require": {
+        "types": "./dist/server.d.cts",
+        "default": "./dist/server.cjs"
+      }
+    },
+    "./browser": "./dist/bwalletx-connect.global.js",
+    "./package.json": "./package.json"
+  },
+  "unpkg": "./dist/bwalletx-connect.global.js",
+  "jsdelivr": "./dist/bwalletx-connect.global.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "bsv",
+    "brc-100",
+    "wallet",
+    "bwalletx",
+    "sign-in",
+    "authentication"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:live": "LIVE_RELAY=1 vitest run test/live-relay.test.ts",
+    "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build"
+  },
+  "peerDependencies": {
+    "@bsv/sdk": ">=2.2.0 <4"
+  },
+  "devDependencies": {
+    "@bsv/sdk": "^2.8.11",
+    "@types/node": "^26.6.4",
+    "@types/ws": "^8.18.2",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.3",
+    "ws": "^8.22.0"
+  }
+}
