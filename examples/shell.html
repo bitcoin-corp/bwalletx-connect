@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>bApp Shell Demo</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:#000;color:#F2F2F0;font:14px -apple-system,BlinkMacSystemFont,system-ui,sans-serif}
+  body{display:flex;flex-direction:column}
+  main{flex:1;overflow:auto;padding:12px;max-width:720px;width:100%;margin:0 auto}
+  .card{border-radius:14px;height:200px;background:linear-gradient(160deg,#3a1d0a,#120a2a);margin-bottom:10px;position:relative;padding:12px;display:flex;flex-direction:column;justify-content:flex-end}
+  .card h3{font-size:17px}.card p{font-size:12px;color:#bbb}
+  .tag{position:absolute;top:10px;left:10px;font-size:10px;background:#FFD24D;color:#000;padding:2px 6px;border-radius:6px;font-weight:700}
+  .strip b{color:#F5B800}
+  .tool svg{width:18px;height:18px}
+  bwalletx-topbar,bwalletx-bar{flex:none}
+</style>
+</head>
+<body>
+  <!-- Web: app icon + title. Add ?wallet=1 to see the in-wallet top bar (☰ + app icon + ✕; web bar hidden). -->
+  <bwalletx-topbar drawer="sections" subtitle="bApp · bmovies.app">
+    <span slot="strip-left">9:41</span>
+    <span slot="strip-right" class="strip"><b>$b0asex</b> · 0.4213 BSV</span>
+    <button slot="tools" class="tool" aria-label="Search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg></button>
+  </bwalletx-topbar>
+  <main>
+    <div class="card"><span class="tag">$NEONRAIN · 318 backers</span><h3>Neon Rain</h3><p>Trailer · 2:14 · 318 holders</p></div>
+    <div class="card" style="background:linear-gradient(160deg,#0a2a2a,#2a0a1a)"><span class="tag">NEW</span><h3>The Last Satoshi</h3><p>Released today · 41 comments</p></div>
+    <div class="card" style="background:linear-gradient(160deg,#1a2a0a,#0a0a2a)"><h3>Satoshi's Garden</h3><p>Teaser · 0:58</p></div>
+  </main>
+  <bwalletx-drawer id="sections" current="/home" navigate="manual"></bwalletx-drawer>
+  <bwalletx-bar active="feed" navigate="manual"></bwalletx-bar>
+
+  <script src="../dist/bwalletx-shell.global.js"></script>
+  <script>
+    // In a real app: const manifest = await bWalletXShell.loadManifest(); (fetches /.well-known/bapp.json)
+    const manifest = bWalletXShell.parseManifest({
+      version: 1, name: 'bMovies', icon: '/icon-192.png', home: '/home',
+      slots: {
+        wallet: { path: '/wallet', enabled: true }, exchange: { path: '/market', enabled: true },
+        b: { path: '/b', enabled: true }, feed: { path: '/feed', enabled: true }, chat: { path: '/chat', enabled: true },
+      },
+      drawer: [
+        { label: 'Studio · Make', path: '/studio' }, { label: 'Timeline', path: '/timeline' },
+        { label: 'Channels', path: '/channels' }, { label: 'Commission', path: '/commission' },
+        { label: 'Profile', path: '/profile' }, { label: 'Settings', path: '/settings' },
+      ],
+      like: { fields: { id: 'id', token: 'tokenId' } },
+    });
+    delete manifest.icon; // demo has no icon file; the app button falls back to initials
+    const q = new URLSearchParams(location.search);
+    if (q.has('wallet')) document.querySelectorAll('bwalletx-topbar,bwalletx-bar,bwalletx-drawer').forEach((el) => el.setAttribute('in-wallet', 'true'));
+    if (q.has('disabled')) manifest.slots.exchange = { enabled: false };
+    bWalletXShell.applyManifest(manifest);
+    bWalletXShell.startShellBridge({ manifest });
+    addEventListener('bapp-navigate', (e) => console.log('navigate', e.detail));
+    if (location.hash === '#drawer') document.getElementById('sections').open = true;
+  </script>
+</body>
+</html>

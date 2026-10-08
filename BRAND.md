@@ -59,6 +59,22 @@ Leave space around the button equal to half its height (at least 8px) free of ot
 
 Black on the gold gradient is above 9:1, and the subtitle stays above 4.5:1 (WCAG AA) at every point of the gradient.
 
+## bApp shell (bar, top bar, drawer)
+
+The shell copies the bWalletX dock exactly. Don't restyle it per app; `theme.accent` in bapp.json is the only override.
+
+| Token | Value |
+|---|---|
+| Bar | 88px, background `#0A0B0D`, 1px top hairline `#1C1C1E` |
+| Slot icons | 20px, inactive `#F2F2F0`, active `#FFD24D` |
+| Slot labels | 10px, `#98A2B3`; active gold and bold |
+| (b) | 52px black disc, 2px gold ring, snug in the bar (no float gap) |
+| Disabled slot | 35% opacity, not clickable, never hidden |
+| Top bar | 28px strip + 56px row; round 36px tools, ring `#2A2A2C`, icons `#F5B800` |
+| Order | Wallet · Exchange · (b) · Feed · Chat. Top left: ☰ (in the wallet) then the app icon; ✕ on the right in the wallet |
+
+Wording on Feed likes: "fund", "back", "support". Never "invest", "returns" or "earn".
+
 ## Files
 
 `assets/` has the mark (`bwalletx-mark.svg`, `bwalletx-mark-circle.svg`), full buttons (`signin-gold.svg`, `signin-dark.svg`, `signin-light.svg`) and a no-JavaScript HTML/CSS version (`snippet.html`).

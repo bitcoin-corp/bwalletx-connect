@@ -1,0 +1,28 @@
+{
+  "$schema": "https://bwalletx.com/schema/bapp.schema.json",
+  "version": 1,
+  "name": "bMovies",
+  "icon": "/icon-192.png",
+  "home": "/home",
+  "slots": {
+    "wallet": { "path": "/wallet", "enabled": true },
+    "exchange": { "path": "/market", "enabled": true },
+    "b": { "path": "/b", "enabled": true },
+    "feed": { "path": "/feed", "enabled": true },
+    "chat": { "path": "/chat", "enabled": true }
+  },
+  "drawer": [
+    { "label": "Studio · Make", "path": "/studio" },
+    { "label": "Timeline", "path": "/timeline" },
+    { "label": "Channels", "path": "/channels" },
+    { "label": "Commission", "path": "/commission" },
+    { "label": "Profile", "path": "/profile" },
+    { "label": "Settings", "path": "/settings" }
+  ],
+  "like": {
+    "fields": { "id": "id", "token": "tokenId", "payee": "payee", "title": "title", "media": "poster" },
+    "amountCents": 1,
+    "currency": "PNEE",
+    "dailyCapCents": 100
+  }
+}

@@ -192,6 +192,50 @@ The phone sends a plain `hello` and then, as soon as the user taps Connect, an e
 
 This build includes `@bsv/sdk` (about 125 KB minified). The server functions are not in it.
 
+## bApp shell
+
+`@bwalletx/connect/shell` gives every bApp the same 5-slot bar as the bWalletX dock: **Wallet · Exchange · (b) · Feed · Chat**, each scoped to your app. Your app's Home and sections live in a drawer opened from the app icon, top left. On the web the package draws the bar; inside bWalletX it hides it and the wallet's native dock drives your app instead.
+
+![bApp shell at 390px](docs/screens/shell-390.png)
+
+1. Serve `/.well-known/bapp.json` (schema: [`schema/bapp.schema.json`](schema/bapp.schema.json), sample: [`examples/bapp.bmovies.json`](examples/bapp.bmovies.json)). All paths are same-origin; a slot you don't use is `"enabled": false` (shown greyed out, never hidden).
+2. Add the elements:
+
+```html
+<bwalletx-topbar drawer="sections"></bwalletx-topbar>
+<main>…</main>
+<bwalletx-drawer id="sections"></bwalletx-drawer>
+<bwalletx-bar active="feed"></bwalletx-bar>
+<script type="module">
+  import { defineBappShell, loadManifest, applyManifest, startShellBridge } from '@bwalletx/connect/shell';
+  defineBappShell();
+  const manifest = await loadManifest();      // fetches and validates /.well-known/bapp.json
+  applyManifest(manifest);
+  startShellBridge({ manifest });             // inside bWalletX: hide the bar, follow the wallet's dock
+</script>
+```
+
+React:
+
+```tsx
+import { BappTopbar, BappDrawer, BappBar } from '@bwalletx/connect/shell/react';
+<BappTopbar manifest={m} drawer="sections" />
+<BappDrawer id="sections" manifest={m} manualNavigation onNavigate={(d) => router.push(d.path!)} />
+<BappBar manifest={m} active={slot} manualNavigation onNavigate={(d) => router.push(d.path!)} />
+```
+
+No bundler: `<script src="https://unpkg.com/@bwalletx/connect/dist/bwalletx-shell.global.js">` registers the elements and exposes `window.bWalletXShell`.
+
+| Element | Attributes | Events (bubble, composed) |
+|---|---|---|
+| `<bwalletx-bar>` | `active`, `in-wallet` (`auto`/`true`/`false`), `navigate="manual"`; property `manifest` | `bapp-navigate {slot, path}` (cancelable), `bapp-active {slot}`, `bapp-b-press`, `bapp-b-hold {phase}` |
+| `<bwalletx-topbar>` | `title`, `subtitle`, `drawer` (id), `menu="true"`, `strip="off"`, `in-wallet`; slots `strip-left`, `strip-right`, `tools` | `bapp-menu`, `bapp-close`, `bapp-drawer-toggle` (cancelable) |
+| `<bwalletx-drawer>` | `open`, `current` (path), `in-wallet`, `navigate="manual"` | `bapp-navigate {path}` (cancelable), `bapp-close` |
+
+`bapp-navigate` goes to the manifest path with `location.assign` unless you call `preventDefault()` or set `navigate="manual"`, so SPAs route themselves. Inside the wallet, ☰ and ✕ appear in the top bar and the drawer gets "Back to bWalletX".
+
+API: `validateManifest(json)` → `{ok, manifest, errors}`, `parseManifest`, `loadManifest(path?)`, `isSameOriginPath`, `slotPath`, `detectWalletUA(ua?)`, `walletState()`, `ShellBridge` / `startShellBridge({manifest, walletOrigins?})`, `defineBappShell()`, `applyManifest(m)`, `TOKENS`. The wallet message protocol is in [docs/SHELL-PROTOCOL.md](docs/SHELL-PROTOCOL.md). Demo: `examples/shell.html` (after `pnpm build`; `?wallet=1` shows the in-wallet top bar, `#drawer` opens the drawer).
+
 ## Limits
 
 - You get the identity key and nothing else: no handle, paymail or name.

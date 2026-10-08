@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bwalletx.com/schema/bapp.schema.json",
+  "title": "bApp manifest (/.well-known/bapp.json)",
+  "description": "Declares a bApp's five scoped slots (Wallet, Exchange, (b), Feed, Chat), its drawer and like-to-fund config. All paths are same-origin. Validate in code with validateManifest() from @bwalletx/connect/shell, which also enforces the rules JSON Schema cannot (URL origin check, amount <= cap).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "name", "icon", "slots"],
+  "$defs": {
+    "path": {
+      "type": "string",
+      "description": "Same-origin path: one leading slash, no scheme, no protocol-relative //, no backslash or whitespace.",
+      "pattern": "^/(?![/\\\\])[^\\s\\\\]*$",
+      "maxLength": 512
+    },
+    "slot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "path": { "$ref": "#/$defs/path" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 12 },
+        "enabled": { "type": "boolean", "description": "false = greyed out and not clickable. Slots are never hidden." }
+      }
+    },
+    "pathSlot": {
+      "allOf": [
+        { "$ref": "#/$defs/slot" },
+        { "if": { "properties": { "enabled": { "const": true } } }, "then": { "required": ["path"] } }
+      ]
+    },
+    "fieldName": { "type": "string", "minLength": 1, "maxLength": 64 }
+  },
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": { "const": 1 },
+    "name": { "type": "string", "minLength": 1, "maxLength": 40 },
+    "icon": { "$ref": "#/$defs/path" },
+    "home": { "$ref": "#/$defs/path", "default": "/" },
+    "theme": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "accent": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$", "default": "#FFD24D" } }
+    },
+    "slots": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wallet", "exchange", "b", "feed", "chat"],
+      "properties": {
+        "wallet": { "$ref": "#/$defs/pathSlot" },
+        "exchange": { "$ref": "#/$defs/pathSlot" },
+        "b": { "$ref": "#/$defs/slot" },
+        "feed": { "$ref": "#/$defs/pathSlot" },
+        "chat": { "$ref": "#/$defs/pathSlot" }
+      }
+    },
+    "drawer": {
+      "type": "array",
+      "maxItems": 24,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label", "path"],
+        "properties": {
+          "label": { "type": "string", "minLength": 1, "maxLength": 40 },
+          "path": { "$ref": "#/$defs/path" },
+          "icon": { "$ref": "#/$defs/path" }
+        }
+      }
+    },
+    "like": {
+      "type": "object",
+      "description": "Like-to-fund config (config only in Phase 1). A Like is a small purchase of the item's utility token.",
+      "additionalProperties": false,
+      "required": ["fields"],
+      "properties": {
+        "fields": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "token"],
+          "properties": {
+            "id": { "$ref": "#/$defs/fieldName" },
+            "token": { "$ref": "#/$defs/fieldName" },
+            "payee": { "$ref": "#/$defs/fieldName" },
+            "title": { "$ref": "#/$defs/fieldName" },
+            "media": { "$ref": "#/$defs/fieldName" }
+          }
+        },
+        "amountCents": { "type": "integer", "minimum": 1, "default": 1 },
+        "currency": { "enum": ["PNEE", "BSV"], "default": "PNEE" },
+        "dailyCapCents": { "type": "integer", "minimum": 1, "maximum": 100, "default": 100 }
+      }
+    }
+  }
+}
