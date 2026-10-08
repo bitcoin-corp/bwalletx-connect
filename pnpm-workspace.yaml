@@ -1,0 +1,3 @@
+# pnpm 11+ settings. esbuild (via tsup) needs its install script for its native binary.
+allowBuilds:
+  esbuild: true
