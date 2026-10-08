@@ -1,4 +1,5 @@
-# Publish @bwalletx/connect to npm when a version tag (v1.2.3) is pushed.
+# Stage @bwalletx/connect on npm when a version tag (v1.2.3) is pushed; a maintainer
+# then approves the staged version on npmjs.com.
 # Uses npm trusted publishing (OIDC): no npm token is stored anywhere. One-time setup on
 # npmjs.com → @bwalletx/connect → Settings → Trusted publisher → GitHub Actions:
 #   organization/user: bitcoin-corp · repository: bwalletx-connect · workflow: publish.yml
@@ -37,5 +38,6 @@ jobs:
       # Trusted publishing needs npm 11.5.1 or newer.
       - run: npm install -g npm@latest
 
-      # prepublishOnly runs typecheck, tests and build.
-      - run: npm publish --access public
+      # Staged publishing: the version waits on npmjs.com until a maintainer approves it
+      # there (passkey). prepublishOnly runs typecheck, tests and build first.
+      - run: npm stage publish --access public
