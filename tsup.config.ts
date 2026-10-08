@@ -2,18 +2,18 @@ import { defineConfig } from 'tsup';
 
 export default defineConfig([
   {
-    // npm: ESM + CJS + types. @bsv/sdk stays a peer dependency.
-    entry: { index: 'src/index.ts', server: 'src/server.ts' },
+    // npm: ESM + CJS + types. @bsv/sdk and react stay peer dependencies.
+    entry: { index: 'src/index.ts', server: 'src/server.ts', element: 'src/define.ts', react: 'src/react.ts' },
     format: ['esm', 'cjs'],
     dts: true,
     clean: true,
     sourcemap: true,
     target: 'es2022',
-    external: ['@bsv/sdk'],
+    external: ['@bsv/sdk', 'react'],
   },
   {
-    // One <script> tag: window.bWalletXConnect, with @bsv/sdk bundled in.
-    entry: { 'bwalletx-connect': 'src/index.ts' },
+    // One <script> tag: window.bWalletXConnect with @bsv/sdk bundled in, and <bwalletx-signin> registered.
+    entry: { 'bwalletx-connect': 'src/browser.ts' },
     format: ['iife'],
     globalName: 'bWalletXConnect',
     platform: 'browser',

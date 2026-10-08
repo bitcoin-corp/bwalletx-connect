@@ -1,10 +1,14 @@
 {
   "name": "@bwalletx/connect",
-  "version": "0.1.0",
-  "description": "Sign in with bWalletX: wallet discovery, phone pairing and server-side challenge verification",
+  "version": "0.2.0",
+  "description": "Sign in with bWalletX: the standard button (web component + React), wallet discovery, phone pairing and server-side challenge verification",
   "license": "MIT",
   "type": "module",
-  "sideEffects": false,
+  "sideEffects": [
+    "./dist/element.js",
+    "./dist/element.cjs",
+    "./dist/bwalletx-connect.global.js"
+  ],
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -29,14 +33,38 @@
         "default": "./dist/server.cjs"
       }
     },
+    "./element": {
+      "import": {
+        "types": "./dist/element.d.ts",
+        "default": "./dist/element.js"
+      },
+      "require": {
+        "types": "./dist/element.d.cts",
+        "default": "./dist/element.cjs"
+      }
+    },
+    "./react": {
+      "import": {
+        "types": "./dist/react.d.ts",
+        "default": "./dist/react.js"
+      },
+      "require": {
+        "types": "./dist/react.d.cts",
+        "default": "./dist/react.cjs"
+      }
+    },
     "./browser": "./dist/bwalletx-connect.global.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./assets/*": "./assets/*"
   },
   "unpkg": "./dist/bwalletx-connect.global.js",
   "jsdelivr": "./dist/bwalletx-connect.global.js",
   "files": [
     "dist",
+    "assets",
     "README.md",
+    "BRAND.md",
+    "TRADEMARKS.md",
     "LICENSE"
   ],
   "keywords": [
@@ -45,7 +73,9 @@
     "wallet",
     "bwalletx",
     "sign-in",
-    "authentication"
+    "authentication",
+    "web-component",
+    "sign-in-button"
   ],
   "engines": {
     "node": ">=20"
@@ -58,15 +88,24 @@
     "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build"
   },
   "peerDependencies": {
-    "@bsv/sdk": ">=2.2.0 <4"
+    "@bsv/sdk": ">=2.2.0 <4",
+    "react": ">=18"
   },
   "devDependencies": {
     "@bsv/sdk": "^2.8.11",
     "@types/node": "^26.6.4",
+    "@types/react": "^19.3.0",
     "@types/ws": "^8.18.2",
+    "happy-dom": "^20.14.5",
+    "react": "^19.3.0",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
     "vitest": "^5.0.3",
     "ws": "^8.22.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   }
 }

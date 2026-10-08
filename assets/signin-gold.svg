@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="260" height="60" viewBox="0 0 260 60" role="img" aria-label="Sign in with bWalletX, also works with bWallet">
+<defs><linearGradient id="g" gradientUnits="userSpaceOnUse" x1="0" y1="12" x2="0" y2="105"><stop offset="0" stop-color="#FFE58A"/><stop offset=".55" stop-color="#FFD24D"/><stop offset="1" stop-color="#C98F00"/></linearGradient><mask id="h"><rect width="140" height="140" fill="#fff"/><circle cx="60" cy="72" r="15" fill="#000"/></mask><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fcd34d"/><stop offset="1" stop-color="#f59e0b"/></linearGradient></defs>
+<rect x="0" y=".5" width="252" height="59" rx="12" fill="url(#bg)" stroke="none" stroke-width="0"/>
+<circle cx="38" cy="30" r="14" fill="#000"/>
+<g transform="translate(38 30) scale(.2) translate(-60 -58)"><g fill="url(#g)" mask="url(#h)"><polygon points="45,12 45,76 27,76 27,30"/><circle cx="60" cy="72" r="33"/></g></g>
+<text x="64" y="28" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="700" fill="#000">Sign in with bWalletX</text>
+<text x="64" y="42" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="11" font-weight="500" fill="rgba(0,0,0,.65)">also works with bWallet</text>
+</svg>

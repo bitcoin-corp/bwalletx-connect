@@ -14,6 +14,45 @@ pnpm add @bwalletx/connect @bsv/sdk
 
 `@bsv/sdk` (2.2 or later, 2.x or 3.x) is a peer dependency.
 
+## The button
+
+`<bwalletx-signin>` is the standard "Sign in with bWalletX" button: a web component with no dependencies (Shadow DOM), plus a React wrapper. It is the gold button from bit-sign's sign-in card.
+
+```html
+<script src="https://unpkg.com/@bwalletx/connect@0.2.0"></script>
+<bwalletx-signin challenge-url="/auth/bwalletx/challenge" verify-url="/auth/bwalletx/verify"></bwalletx-signin>
+<script>
+  document.addEventListener('bwalletx-signed-in', (e) => location.assign('/'));
+</script>
+```
+
+With a bundler: `import '@bwalletx/connect/element'` registers the element. In React:
+
+```tsx
+import { BwalletxSignin } from '@bwalletx/connect/react';
+
+<BwalletxSignin challengeUrl="/auth/bwalletx/challenge" verifyUrl="/auth/bwalletx/verify" onSignedIn={(d) => console.log(d.identityKey)} />
+```
+
+| Attribute | Values |
+|---|---|
+| `size` | `lg` (default), `md`, `sm`, `icon` |
+| `theme` | `gold` (default), `dark`, `light` |
+| `label` | `signin` (default), `continue`, `connect` |
+| `brand` | `bWalletX` (default), `bWallet` (store edition) |
+| `subtitle` | `on`, `off`, or your own text. Default "also works with bWallet" on lg/md |
+| `full-width`, `loading`, `disabled` | flags |
+| `challenge-url`, `verify-url` | run the sign-in flow on click: POST `{ identityKey }`, then POST `{ identityKey, nonce, signature }` |
+| `get-url`, `web-url` | where "Get bWalletX" and the web wallet link go (bwalletx.com/get, web.bwalletx.com) |
+| `href` | navigate on click instead |
+| `authorize-url`, `client-id`, `redirect-uri`, `scope` | OAuth 2.1 redirect with S256 PKCE (verifier, state and nonce in `sessionStorage["bwalletx:oauth"]`). For auth.bwalletx.com, which is planned and not live yet |
+
+Events (bubbling, composed): `bwalletx-signin` on every click (call `preventDefault()` to run your own flow instead), `bwalletx-signed-in` with `{ identityKey, method, nonce, signature, response }`, `bwalletx-not-found` (the button then shows "Get bWalletX" and a web wallet link), `bwalletx-error` with `{ error }`.
+
+Without `challenge-url`, `href` or `authorize-url` the button only fires `bwalletx-signin`. The built-in flow uses the extension or in-app browser only. For phone pairing, listen for `bwalletx-signin`, call `preventDefault()`, and call `signInWithBwalletX` with `pairing` as shown above.
+
+SVG files, and an HTML/CSS version with no JavaScript, are in `assets/`. All variants: `examples/buttons.html`. Placement, sizes and do/don't: [BRAND.md](./BRAND.md). The names and logo are not MIT licensed: [TRADEMARKS.md](./TRADEMARKS.md).
+
 ## Server
 
 ```ts

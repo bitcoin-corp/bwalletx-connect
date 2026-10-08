@@ -7,3 +7,5 @@ export type { Challenge, SignInOptions, SignInResult, SignInMethod } from './sig
 export { renderButton, LOGO_URL } from './button.js';
 export type { ButtonOptions } from './button.js';
 export { inOrder } from './in-order.js';
+export { defineBwalletxSignin, buildAuthorizeUrl, signinText, markSvg, SIGNIN_TAG, SIGNIN_CSS, GET_URL, WEB_WALLET_URL } from './element.js';
+export type { SigninSize, SigninTheme, SigninLabel, SigninBrand, AuthorizeParams } from './element.js';

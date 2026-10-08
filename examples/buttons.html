@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bWalletX sign-in buttons</title>
+<script src="../dist/bwalletx-connect.global.js"></script>
+<style>
+:root{color-scheme:light dark}
+body{margin:0;padding:32px 16px;background:#09090b;color:#e4e4e7;font:15px/1.5 Inter,ui-sans-serif,system-ui,sans-serif}
+main{max-width:960px;margin:0 auto}
+h1{font-size:24px;margin:0 0 4px}h2{font-size:15px;margin:32px 0 12px;color:#a1a1aa;font-weight:600;text-transform:uppercase;letter-spacing:.06em}
+.row{display:flex;flex-wrap:wrap;gap:16px;align-items:center;padding:20px;border:1px solid #27272a;border-radius:14px}
+.row.light{background:#fafafa;border-color:#e4e4e7}
+.narrow{max-width:360px}
+code{font-size:12px;color:#a1a1aa}
+#log{font:12px ui-monospace,monospace;color:#a1a1aa;white-space:pre-wrap}
+</style>
+</head>
+<body>
+<main>
+<h1>Sign in with bWalletX</h1>
+<p>Every variant of <code>&lt;bwalletx-signin&gt;</code>. Build first: <code>pnpm build</code>, then open this file.</p>
+
+<h2>Sizes (gold)</h2>
+<div class="row">
+  <bwalletx-signin></bwalletx-signin>
+  <bwalletx-signin size="md"></bwalletx-signin>
+  <bwalletx-signin size="sm"></bwalletx-signin>
+  <bwalletx-signin size="icon"></bwalletx-signin>
+</div>
+
+<h2>Themes on dark</h2>
+<div class="row">
+  <bwalletx-signin theme="gold"></bwalletx-signin>
+  <bwalletx-signin theme="dark"></bwalletx-signin>
+  <bwalletx-signin theme="dark" size="md" label="continue"></bwalletx-signin>
+  <bwalletx-signin theme="dark" size="icon"></bwalletx-signin>
+</div>
+
+<h2>Themes on light</h2>
+<div class="row light">
+  <bwalletx-signin></bwalletx-signin>
+  <bwalletx-signin theme="light"></bwalletx-signin>
+  <bwalletx-signin theme="light" size="sm" label="connect"></bwalletx-signin>
+  <bwalletx-signin theme="light" size="icon"></bwalletx-signin>
+</div>
+
+<h2>Labels and brand</h2>
+<div class="row">
+  <bwalletx-signin label="continue"></bwalletx-signin>
+  <bwalletx-signin label="connect" subtitle="off"></bwalletx-signin>
+  <bwalletx-signin brand="bWallet"></bwalletx-signin>
+  <bwalletx-signin subtitle="no extension needed"></bwalletx-signin>
+</div>
+
+<h2>States</h2>
+<div class="row">
+  <bwalletx-signin loading></bwalletx-signin>
+  <bwalletx-signin disabled></bwalletx-signin>
+  <bwalletx-signin theme="dark" loading size="md"></bwalletx-signin>
+</div>
+
+<h2>Full width, live flow (no server here, so you'll see "Get bWalletX" or an error)</h2>
+<div class="row narrow"><bwalletx-signin full-width challenge-url="/auth/bwalletx/challenge" verify-url="/auth/bwalletx/verify"></bwalletx-signin></div>
+<pre id="log"></pre>
+</main>
+<script>
+const log = (s) => (document.getElementById('log').textContent += s + '\n');
+for (const t of ['bwalletx-signin', 'bwalletx-signed-in', 'bwalletx-not-found', 'bwalletx-error'])
+  document.addEventListener(t, (e) => log(t + (e.detail && e.detail.error ? ': ' + e.detail.error.message : '')));
+</script>
+</body>
+</html>
