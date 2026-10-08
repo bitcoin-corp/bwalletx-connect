@@ -36,7 +36,7 @@
   <script>
     // In a real app: const manifest = await bWalletXShell.loadManifest(); (fetches /.well-known/bapp.json)
     const manifest = bWalletXShell.parseManifest({
-      version: 1, name: 'bMovies', icon: '/icon-192.png', home: '/home',
+      version: 1, name: 'bMovies', icon: '/examples/bmovies-icon.png', home: '/home',
       slots: {
         wallet: { path: '/wallet', enabled: true }, exchange: { path: '/market', enabled: true },
         b: { path: '/b', enabled: true }, feed: { path: '/feed', enabled: true }, chat: { path: '/chat', enabled: true },
@@ -48,7 +48,6 @@
       ],
       like: { fields: { id: 'id', token: 'tokenId' } },
     });
-    delete manifest.icon; // demo has no icon file; the app button falls back to initials
     const q = new URLSearchParams(location.search);
     if (q.has('wallet')) document.querySelectorAll('bwalletx-topbar,bwalletx-bar,bwalletx-drawer').forEach((el) => el.setAttribute('in-wallet', 'true'));
     if (q.has('disabled')) manifest.slots.exchange = { enabled: false };
