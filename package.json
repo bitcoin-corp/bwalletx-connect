@@ -3,6 +3,14 @@
   "version": "0.2.0",
   "description": "Sign in with bWalletX: the standard button (web component + React), wallet discovery, phone pairing and server-side challenge verification",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bitcoin-corp/bwalletx-connect.git"
+  },
+  "homepage": "https://bwalletx.com/sign-in-button",
+  "bugs": {
+    "url": "https://github.com/bitcoin-corp/bwalletx-connect/issues"
+  },
   "type": "module",
   "sideEffects": [
     "./dist/element.js",
