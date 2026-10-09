@@ -54,6 +54,23 @@ with `window.ReactNativeWebView.postMessage(JSON.stringify(msg))` when present.
 - Send only slot ids, never URLs.
 - Read the manifest from the app's origin; ignore any slot whose path fails `isSameOriginPath`.
 
+## v2: wide layout (0.4.0)
+
+Plan: WIDE-SHELL.md. The manifest may add a `wide` block (`sidebar`, `sections`, `panes`,
+`minWidth`), checked by `validateManifest()`. `wideSections(m)` returns the sections, falling back to
+the v1 path slots for a v1 manifest. All messages below need a completed `bapp:hello` (or UA mode)
+and follow the same origin and source rules as v1.
+
+| Message | Direction | App does |
+|---|---|---|
+| `{type:'bapp:layout', v:2, layout:'phone'\|'wide', width?, standalone?}` | wallet → app | sets `data-bwx-layout` (and `data-bwx-standalone`) on `<html>`, fires `bapp-layout`; `<bwalletx-bar>` and `<bwalletx-topbar>` hide in `wide` |
+| `{type:'bapp:navigate', v:2, section}` | wallet → app | `section` must be an id in `wideSections()`; fires cancelable `bapp-navigate {section, path, source:'wallet'}`, else `location.assign(path)`; replies `bapp:active` |
+| `{type:'bapp:active', v:2, section}` | app → wallet | `bridge.setActiveSection(id)` or a `bapp-active {section}` event |
+| `{type:'bapp:badge', v:2, count}` | app → wallet | `bridge.setBadge(n)`; whole number, 0 clears |
+| `{type:'bapp:title', v:2, title}` | app → wallet | `bridge.setTitle(s)`; plain text, max 80 |
+
+`bapp:ready` also carries `section` when one is active.
+
 ## Not in Phase 1
 
 - Hold-to-talk on (b). The web bar fires `bapp-b-press` (tap) and `bapp-b-hold {phase:'start'|'end'}` only.

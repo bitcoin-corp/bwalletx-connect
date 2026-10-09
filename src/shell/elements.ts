@@ -4,7 +4,7 @@
  * Framework-free; React wrappers in ./react.ts.
  */
 import { SLOT_IDS, isSlotId, slotPath, type BappManifest, type SlotId } from './manifest.js';
-import { detectWalletUA, walletState } from './wallet.js';
+import { detectWalletUA, layoutState, walletState } from './wallet.js';
 
 export const TOKENS = {
   barHeight: 88, barBg: '#0A0B0D', hairline: '#1C1C1E', icon: 20, active: '#FFD24D', inactive: '#F2F2F0',
@@ -46,14 +46,24 @@ function navigate(el: HTMLElement, detail: { slot?: SlotId; path: string | null 
 abstract class ShellElement extends Base {
   protected _manifest: BappManifest | null = null;
   private readonly onWallet = () => this.render();
+  private readonly onLayout = () => this.syncLayout();
+  /** In the wide layout the wallet draws the sidebar, top bar and sections; bar and topbar hide. */
+  protected syncLayout(): void {
+    if (layoutState().layout === 'wide') this.setAttribute('data-wide', ''); else this.removeAttribute('data-wide');
+  }
   get manifest(): BappManifest | null { return this._manifest; }
   set manifest(m: BappManifest | null) { this._manifest = m; this.render(); }
   connectedCallback(): void {
     if (!this.shadowRoot) this.attachShadow({ mode: 'open' });
     window.addEventListener('bapp-wallet', this.onWallet);
+    window.addEventListener('bapp-layout', this.onLayout);
+    this.syncLayout();
     this.render();
   }
-  disconnectedCallback(): void { window.removeEventListener('bapp-wallet', this.onWallet); }
+  disconnectedCallback(): void {
+    window.removeEventListener('bapp-wallet', this.onWallet);
+    window.removeEventListener('bapp-layout', this.onLayout);
+  }
   attributeChangedCallback(): void { if (this.shadowRoot) this.render(); }
   protected accent(): string { return this._manifest?.theme?.accent ?? TOKENS.active; }
   abstract render(): void;
@@ -62,7 +72,7 @@ abstract class ShellElement extends Base {
 // ---------------------------------------------------------------- <bwalletx-bar>
 const BAR_CSS = `
 :host{display:block;--bwx-accent:${TOKENS.active}}
-:host([hidden]),:host([data-in-wallet]){display:none!important}
+:host([hidden]),:host([data-in-wallet]),:host([data-wide]){display:none!important}
 nav{height:${TOKENS.barHeight}px;box-sizing:border-box;background:${TOKENS.barBg};border-top:1px solid ${TOKENS.hairline};
  display:flex;align-items:flex-start;padding:10px 0 env(safe-area-inset-bottom,0);font:10px/1.2 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif}
 button{all:unset;box-sizing:border-box;flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;
@@ -142,7 +152,7 @@ export class BwalletxBarElement extends ShellElement {
 // ---------------------------------------------------------------- <bwalletx-topbar>
 const TOP_CSS = `
 :host{display:block;--bwx-accent:${TOKENS.active};font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif}
-:host([hidden]){display:none!important}
+:host([hidden]),:host([data-wide]){display:none!important}
 .strip{height:${TOKENS.stripHeight}px;display:flex;align-items:center;justify-content:space-between;padding:0 16px;font-size:11px;color:#9a9a9a;background:${TOKENS.barBg}}
 ::slotted([slot^="strip"]){color:inherit}
 .row{height:${TOKENS.rowHeight}px;box-sizing:border-box;display:flex;align-items:center;gap:8px;padding:0 12px;background:${TOKENS.barBg};border-bottom:1px solid ${TOKENS.hairline}}

@@ -1,6 +1,6 @@
 {
   "name": "@bwalletx/connect",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Sign in with bWalletX (button, discovery, pairing, server verification) and the bApp shell (5-slot bar, top bar, drawer, bapp.json manifest)",
   "license": "MIT",
   "repository": {

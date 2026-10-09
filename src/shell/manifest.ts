@@ -39,6 +39,32 @@ export interface BappTheme {
   accent?: string;
 }
 
+/** v2 wide layout: a section of the bApp, drawn by the wallet as a column next to its sidebar. */
+export interface BappSection {
+  /** Stable id, [a-z0-9-], max 24. Sent in bapp:navigate / bapp:active. */
+  id: string;
+  label: string;
+  /** Same-origin path. */
+  path: string;
+  /** Named icon (e.g. "home", "spark", "grid", "chat") or a same-origin path. */
+  icon?: string;
+}
+
+export const PANES = ['single', 'list-detail', 'three-pane'] as const;
+export type BappPanes = (typeof PANES)[number];
+
+export interface BappWide {
+  sidebar?: { label?: string; icon?: string; badge?: 'live' | number };
+  /** If omitted, the wide shell maps the v1 slots to sections (see wideSections). */
+  sections?: BappSection[];
+  panes: BappPanes;
+  /** Below this frame width the wallet uses the phone layout. Default 720. */
+  minWidth: number;
+}
+
+export const WIDE_MIN_WIDTH_DEFAULT = 720;
+export const SECTION_ID_RE = /^[a-z0-9][a-z0-9-]{0,23}$/;
+
 export interface BappManifest {
   version: 1;
   name: string;
@@ -50,6 +76,8 @@ export interface BappManifest {
   slots: Record<SlotId, BappSlot>;
   drawer: BappDrawerItem[];
   like?: BappLikeConfig;
+  /** v2: wide (desktop / wide web) layout. */
+  wide?: BappWide;
 }
 
 export type ValidationResult =
@@ -84,7 +112,7 @@ export function validateManifest(input: unknown): ValidationResult {
   const errors: string[] = [];
   if (!isObj(input)) return { ok: false, errors: ['manifest must be a JSON object'] };
   const m = input;
-  const known = new Set(['$schema', 'version', 'name', 'icon', 'home', 'theme', 'slots', 'drawer', 'like']);
+  const known = new Set(['$schema', 'version', 'name', 'icon', 'home', 'theme', 'slots', 'drawer', 'like', 'wide']);
   for (const k of Object.keys(m)) if (!known.has(k)) errors.push(`unknown field "${k}"`);
 
   if (m.version !== 1) errors.push('version must be 1');
@@ -158,15 +186,90 @@ export function validateManifest(input: unknown): ValidationResult {
     }
   }
 
+  let wide: BappWide | undefined;
+  if (m.wide !== undefined) wide = validateWide(m.wide, errors);
+
   if (errors.length) return { ok: false, errors };
   return {
     ok: true,
     errors: [],
     manifest: {
       version: 1, name: (m.name as string).trim(), icon: m.icon as string, home: home as string,
-      ...(theme ? { theme } : {}), slots, drawer, ...(like ? { like } : {}),
+      ...(theme ? { theme } : {}), slots, drawer, ...(like ? { like } : {}), ...(wide ? { wide } : {}),
     },
   };
+}
+
+const NAMED_ICON_RE = /^[a-z][a-z0-9-]{0,23}$/;
+
+function validateWide(w: unknown, errors: string[]): BappWide | undefined {
+  if (!isObj(w)) { errors.push('wide must be an object'); return undefined; }
+  for (const k of Object.keys(w)) if (!['sidebar', 'sections', 'panes', 'minWidth'].includes(k)) errors.push(`unknown field "wide.${k}"`);
+  const out: BappWide = { panes: 'single', minWidth: WIDE_MIN_WIDTH_DEFAULT };
+  if (w.sidebar !== undefined) {
+    const sb = w.sidebar;
+    if (!isObj(sb)) errors.push('wide.sidebar must be an object');
+    else {
+      for (const k of Object.keys(sb)) if (!['label', 'icon', 'badge'].includes(k)) errors.push(`unknown field "wide.sidebar.${k}"`);
+      if (sb.label !== undefined && !str(sb.label, 24)) errors.push('wide.sidebar.label must be a short string (max 24)');
+      if (sb.icon !== undefined && !isSameOriginPath(sb.icon)) errors.push('wide.sidebar.icon must be a same-origin path starting with "/"');
+      if (sb.badge !== undefined && sb.badge !== 'live' && !(Number.isInteger(sb.badge) && (sb.badge as number) >= 0))
+        errors.push('wide.sidebar.badge must be "live" or a whole number');
+      out.sidebar = {
+        ...(sb.label !== undefined ? { label: sb.label as string } : {}),
+        ...(sb.icon !== undefined ? { icon: sb.icon as string } : {}),
+        ...(sb.badge !== undefined ? { badge: sb.badge as 'live' | number } : {}),
+      };
+    }
+  }
+  if (w.sections !== undefined) {
+    if (!Array.isArray(w.sections)) errors.push('wide.sections must be an array');
+    else if (w.sections.length === 0 || w.sections.length > 16) errors.push('wide.sections must have 1..16 items');
+    else {
+      const ids = new Set<string>();
+      out.sections = [];
+      w.sections.forEach((s, i) => {
+        if (!isObj(s)) { errors.push(`wide.sections[${i}] must be an object`); return; }
+        for (const k of Object.keys(s)) if (!['id', 'label', 'path', 'icon'].includes(k)) errors.push(`unknown field "wide.sections[${i}].${k}"`);
+        if (typeof s.id !== 'string' || !SECTION_ID_RE.test(s.id)) errors.push(`wide.sections[${i}].id must match [a-z0-9-] (max 24)`);
+        else if (ids.has(s.id)) errors.push(`wide.sections[${i}].id "${s.id}" is a duplicate`);
+        else ids.add(s.id);
+        if (!str(s.label, 24)) errors.push(`wide.sections[${i}].label must be a non-empty string (max 24)`);
+        if (!isSameOriginPath(s.path)) errors.push(`wide.sections[${i}].path must be a same-origin path starting with "/"`);
+        if (s.icon !== undefined && !(typeof s.icon === 'string' && (NAMED_ICON_RE.test(s.icon) || isSameOriginPath(s.icon))))
+          errors.push(`wide.sections[${i}].icon must be an icon name or a same-origin path`);
+        out.sections!.push({ id: s.id as string, label: s.label as string, path: s.path as string, ...(s.icon !== undefined ? { icon: s.icon as string } : {}) });
+      });
+    }
+  }
+  if (w.panes !== undefined) {
+    if (!(PANES as readonly unknown[]).includes(w.panes)) errors.push('wide.panes must be "single", "list-detail" or "three-pane"');
+    else out.panes = w.panes as BappPanes;
+  }
+  if (w.minWidth !== undefined) {
+    if (!Number.isInteger(w.minWidth) || (w.minWidth as number) < 320 || (w.minWidth as number) > 4096) errors.push('wide.minWidth must be a whole number of px, 320..4096');
+    else out.minWidth = w.minWidth as number;
+  }
+  return out;
+}
+
+/**
+ * The sections the wide shell draws: the manifest's `wide.sections`, or, for a v1 manifest, the
+ * enabled path slots (wallet, exchange, feed, chat) mapped to sections.
+ */
+export function wideSections(m: BappManifest): BappSection[] {
+  if (m.wide?.sections?.length) return m.wide.sections;
+  const icons: Record<SlotId, string> = { wallet: 'wallet', exchange: 'exchange', b: 'b', feed: 'home', chat: 'chat' };
+  const labels: Record<SlotId, string> = { wallet: 'Wallet', exchange: 'Exchange', b: 'b', feed: 'Feed', chat: 'Chat' };
+  return SLOT_IDS.filter((id) => id !== 'b' && m.slots[id].enabled && m.slots[id].path).map((id) => ({
+    id, label: m.slots[id].label ?? labels[id], path: m.slots[id].path!, icon: icons[id],
+  }));
+}
+
+/** The path for a wide section id, or null if the manifest has no such section. */
+export function sectionPath(m: BappManifest, id: unknown): string | null {
+  if (typeof id !== 'string') return null;
+  return wideSections(m).find((s) => s.id === id)?.path ?? null;
 }
 
 /** Same as validateManifest but throws with every error listed. */
