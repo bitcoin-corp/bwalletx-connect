@@ -16,6 +16,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ReactElement,
   type ReactNode,
 } from 'react';
 import type { WalletInterface } from '@bsv/sdk';
@@ -66,7 +67,7 @@ export interface BwalletxSigninProps {
   onError?: (error: unknown) => void;
 }
 
-export function BwalletxSignin(props: BwalletxSigninProps) {
+export function BwalletxSignin(props: BwalletxSigninProps): ReactElement {
   const ref = useRef<HTMLElement>(null);
   const cb = useRef(props);
   cb.current = props;
@@ -183,7 +184,7 @@ async function postJson(url: string, body: unknown): Promise<Record<string, unkn
 }
 
 /** Holds the connected wallet and session for the tree. Renders nothing itself; SSR-safe. */
-export function BwalletXProvider(p: BwalletXProviderProps) {
+export function BwalletXProvider(p: BwalletXProviderProps): ReactElement {
   const [state, setState] = useState<BwalletXState>(empty);
   const [wallets, setWallets] = useState<WalletOption[]>([]);
   const props = useRef(p);
