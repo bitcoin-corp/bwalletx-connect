@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1 (2026-10-12)
+
+- React: `BwalletXProvider` and `BwalletxSignin` declare `ReactElement` return types, so they type-check as JSX under React 18 `@types/react`.
+- First public release of the 0.4 line (0.4.0 was staged on npm but never released).
+
 ## 0.4.0 (2026-10-12)
 
 Everything from 0.3 still works the same way. All additions are BRC-100 first: bWalletX is the main target, but any BRC-100 wallet goes through the same interface.
