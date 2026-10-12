@@ -99,6 +99,8 @@ function Account() {
 
 ## Payments
 
+Other bCorp apps: use `tip()` for the default Tip button (the same one-sheet tip bWalletX shows on artists, NFTs, chat, Friends and Spaces).
+
 ```ts
 import { pay, tip, buyToken } from '@bwalletx/connect';
 
