@@ -1,6 +1,6 @@
 # @bwalletx/connect
 
-Add "Sign in with bWalletX" to a website.
+Add "Sign in with bWalletX" to a website. Built on the open BRC-100 wallet interface, so every BRC-100 wallet works the same way, with bWalletX first.
 
 The user's wallet signs a one-time challenge from your server with a key derived from its identity key. Your server checks the signature and signs the user in as that identity key. You don't need an API key or an account with us, and nothing passes through bwalletx.com. The only service of ours involved is the encrypted pairing relay (`relay.bwallet.space`), and only when the user signs in from a phone or the web wallet.
 
@@ -13,6 +13,144 @@ pnpm add @bwalletx/connect @bsv/sdk
 ```
 
 `@bsv/sdk` (2.2 or later, 2.x or 3.x) is a peer dependency.
+
+## Next.js quick start (App Router)
+
+Works with bWalletX and any other BRC-100 wallet. Set a session secret (32+ characters) in your environment. There is no default: the routes throw without it.
+
+```sh
+# .env.local (never commit it)
+BWALLETX_SESSION_SECRET=   # e.g. the output of: openssl rand -base64 48
+APP_ORIGIN=https://example.com
+```
+
+```ts
+// lib/bwalletx.ts
+import { createBwalletXAuth, pgStore, signInOrLink } from '@bwalletx/connect/next';
+import { query } from './db'; // (sql, params) => Promise<{ rows }>
+
+export const auth = createBwalletXAuth({
+  origin: process.env.APP_ORIGIN!,
+  store: pgStore({ query }),            // or redisStore({ client: upstash })
+  // Optional: link the identity key to your user table.
+  onVerified: async (identityKey) => {
+    const r = await signInOrLink(identityKey, {
+      findUserByIdentityKey: async (k) => (await query('select user_id from wallet_links where identity_key = $1', [k])).rows[0]?.user_id ?? null,
+      attach: async (uid, k) => void (await query('insert into wallet_links (user_id, identity_key) values ($1, $2)', [uid, k])),
+      createUser: async () => (await query('insert into users default values returning id', [])).rows[0].id,
+    });
+    return { uid: r.userId ?? undefined };
+  },
+});
+```
+
+```ts
+// app/api/bwalletx/challenge/route.ts
+import { auth } from '@/lib/bwalletx';
+export const POST = auth.challenge;
+// app/api/bwalletx/verify/route.ts  → export const POST = auth.verify;
+// app/api/bwalletx/logout/route.ts  → export const POST = auth.logout;
+// app/api/bwalletx/session/route.ts → export const GET = auth.session;
+```
+
+```tsx
+// any server component or route handler
+const session = await auth.getSession(); // { sub: identityKey, uid?, handle?, paymail?, exp } | null
+```
+
+The cookie (`bwx_session`) is `HttpOnly; SameSite=Lax; Secure` (Secure when the origin is https), HMAC-SHA256 signed, 7 days by default (`maxAge`). Both POST routes check the `Origin` header against `origin`. `signSession` / `verifySession` are also exported from `@bwalletx/connect/server` if you want the token without the adapter.
+
+Create the nonce table once (a migration): `pgNonceTableSql()` returns the SQL.
+
+## React quick start
+
+```tsx
+'use client';
+import { BwalletXProvider, useBwalletX } from '@bwalletx/connect/react';
+
+export function Providers({ children }: { children: React.ReactNode }) {
+  return (
+    <BwalletXProvider
+      challengeUrl="/api/bwalletx/challenge"
+      verifyUrl="/api/bwalletx/verify"
+      logoutUrl="/api/bwalletx/logout"
+      sessionUrl="/api/bwalletx/session">
+      {children}
+    </BwalletXProvider>
+  );
+}
+
+function Account() {
+  const { status, identityKey, handle, connect, disconnect, tip } = useBwalletX();
+  if (status !== 'connected') return <button onClick={() => connect()}>Connect wallet</button>;
+  return (
+    <>
+      <span>{handle ?? identityKey?.slice(0, 10)}</span>
+      <button onClick={() => tip({ to: 'author@example.com', usd: 0.05 })}>Tip 5¢</button>
+      <button onClick={disconnect}>Sign out</button>
+    </>
+  );
+}
+```
+
+`useBwalletX()` gives `status` (`idle | restoring | connecting | connected | error`), `identityKey`, `handle`, `paymail`, `wallet` (the BRC-100 `WalletInterface`), `walletId`, `signedIn`, `error`, `wallets`, `connect({ walletId? })`, `disconnect()`, `listWallets()`, `pay`, `tip` and `buyToken`.
+
+`connect()` finds wallets, shows the built-in picker when there is more than one (bWalletX first), shows the pairing QR modal for phones, and signs in through your routes when `challengeUrl` and `verifyUrl` are set. Nothing touches `window` during render, so the provider is safe in server-rendered pages. After a reload the session comes back from `sessionUrl`, but `wallet` stays `null` until the user calls `connect()` again.
+
+## Payments
+
+```ts
+import { pay, tip, buyToken } from '@bwalletx/connect';
+
+await pay(wallet, { to: 'alice@example.com', sats: 5000, memo: 'Album' }); // paymail
+await pay(wallet, { to: '1Abc...', usd: 1 });                              // address; WhatsOnChain rate, or pass usdPerBsv
+const r = await pay(wallet, { to: identityKeyHex, sats: 100 });            // BRC-29; r.remittance goes to the recipient
+await buyToken(wallet, { token: '$BOASE', amount: 100, quote: (q) => fetch('/api/quote', { method: 'POST', body: JSON.stringify(q) }).then((x) => x.json()) });
+```
+
+Each call makes one `createAction`, and nothing is ever retried. Failures throw a `PaymentError` with a `code` (`BAD_REQUEST`, `RESOLVE_FAILED`, `RATE_FAILED`, `WALLET_REJECTED`, `WALLET_ERROR`, `NOT_SUPPORTED`). When `maybeSent` is true, the wallet may already have broadcast the payment, so check before you ask the user again. Browsers often can't resolve paymails themselves because of CORS, so pass `resolvePaymail` to do it on your server.
+
+On the server, check the payment before you deliver anything:
+
+```ts
+import { verifyPayment } from '@bwalletx/connect/server';
+
+const r = await verifyPayment({
+  tx: body.tx ?? body.txid,                       // Atomic BEEF / BEEF / raw hex, or a txid (fetched from WhatsOnChain)
+  expected: [{ address: SELLER_ADDRESS, satoshis: price }], // or { script: hex, satoshis }
+  requireSeen: true,                              // status from WhatsOnChain; or status: 'arc', arcUrl, arcApiKey
+});
+```
+
+Every expected output has to be matched by a different output that carries at least the expected amount. Otherwise `verifyPayment` throws a `PaymentVerificationError` with a `code` (`OUTPUT_MISSING`, `TX_NOT_FOUND`, `NOT_SEEN`, `REJECTED`, `SPV_FAILED`, `BAD_TX`, `NETWORK`). Pass `spv: chainTracker` to check the merkle proofs in a BEEF as well.
+
+## Wallets and the picker
+
+`discoverWallets()` lists everything it can find, with bWalletX first:
+
+- every wallet that announces itself through BRC-100 discovery (bWalletX, Yours, Metanet and others)
+- the in-app browser's `window.CWI`
+- desktop wallets on localhost ports 3321 and 3301 (only with `probeLocal: true`)
+- phone pairing (`pairing: pairingModal()`)
+- any adapters you add in `extra`
+
+`pickWallet(list)` shows the picker. `pairingModal()` returns `PairingOptions` that draw the QR code and match code, so you no longer need your own QR library.
+
+## Migrating from HandCash Connect
+
+1. Keep your HandCash login for now and put it behind the same picker:
+   ```ts
+   import { handcashAdapter } from '@bwalletx/connect';
+   const handcash = handcashAdapter({
+     login: () => myExistingHandCashLogin(), // resolves { handle, paymail? } once signed in
+     pay: (req) => fetch('/api/handcash/pay', { method: 'POST', body: JSON.stringify(req) }).then((r) => r.json()),
+   });
+   <BwalletXProvider extraWallets={[handcash]} ... />
+   ```
+   **This adapter is transitional.** It wraps your own HandCash code; this package does not import any HandCash SDK. HandCash announced BRC-100 support in October 2026. Once that ships, HandCash shows up as an ordinary BRC-100 wallet and you can delete the adapter.
+2. Let existing users link their wallet. When someone already signed in with HandCash connects bWalletX, call `signInOrLink(identityKey, { currentUserId, ... })` (or `linkIdentity`) in `onVerified`. This links the identity to their existing account instead of creating a new one. If the identity is already linked to someone else, `IdentityLinkConflictError` turns into a 409 response.
+3. Replace HandCash payment calls with `pay` / `tip` / `buyToken`, and check them on the server with `verifyPayment` instead of HandCash payment webhooks.
+4. Remove the adapter when your users have moved over.
 
 ## The button
 
@@ -108,7 +246,10 @@ interface NonceStore {
 
 `take` must read and delete in one step. `verifySignIn` calls it before checking anything else, so each nonce gets exactly one attempt.
 
-`memoryStore()` keeps challenges in the process. It is lost on restart and isn't shared between processes or serverless instances, so it prints a warning the first time it is used. If you leave out `store`, a shared in-memory store is used and you get the same warning. In production, use Redis (`GETDEL`) or a database row you delete with `DELETE ... RETURNING`.
+`memoryStore()` keeps challenges in the process. It is lost on restart and isn't shared between processes or serverless instances, so it prints a warning the first time it is used. If you leave out `store`, a shared in-memory store is used and you get the same warning. In production it warns louder. Use one of the built-in shared stores, which need no driver dependency because you pass your own client:
+
+- `redisStore({ client })`: Upstash, Vercel KV or node-redis as they are, or ioredis with `flavor: 'ioredis'`. It uses `GETDEL`, so you need Redis 6.2 or later.
+- `pgStore({ query })`: any `(sql, params)` function (node-postgres, postgres.js, Neon). It deletes each nonce with `DELETE ... RETURNING`, and `pgNonceTableSql()` gives you the table.
 
 Also rate-limit the challenge route per IP. It is unauthenticated.
 
@@ -238,10 +379,10 @@ API: `validateManifest(json)` → `{ok, manifest, errors}`, `parseManifest`, `lo
 
 ## Limits
 
-- You get the identity key and nothing else: no handle, paymail or name.
+- Sign-in proves the identity key and nothing else: no handle, paymail or name. Use `onVerified` to look them up and add them yourself.
 - The identity key is the same on every site that uses this method, so two sites can tell it is the same wallet.
 - `relay.bwallet.space` is run by The Bitcoin Corporation. It has no published uptime guarantee and allows about 60 frames a minute per channel.
-- There is no hosted sign-in page or OAuth-style redirect. You run the two routes yourself.
+- There is no hosted sign-in page or OAuth-style redirect (auth.bwalletx.com is planned). You run the routes yourself; `@bwalletx/connect/next` gives you ready-made ones.
 
 ## Testing
 

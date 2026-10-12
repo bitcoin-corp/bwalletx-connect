@@ -1,7 +1,7 @@
 import { PrivateKey } from '@bsv/sdk';
 import WS from 'ws';
 import { describe, expect, it } from 'vitest';
-import { pairBwalletX, restorePairing, type PairStorage, type SocketLike } from '../src/pair';
+import { restorePairing, type PairStorage, type SocketLike } from '../src/pair';
 import { signInWithBwalletX } from '../src/signin';
 import { createChallenge, memoryStore, verifySignIn } from '../src/server';
 import { fakePhone } from './phone';

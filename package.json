@@ -1,7 +1,7 @@
 {
   "name": "@bwalletx/connect",
-  "version": "0.3.0",
-  "description": "Sign in with bWalletX (button, discovery, pairing, server verification) and the bApp shell (5-slot bar, top bar, drawer, bapp.json manifest)",
+  "version": "0.4.0",
+  "description": "Sign in with bWalletX or any BRC-100 wallet: button, React provider, Next.js sessions, nonce stores, pay/tip helpers, payment verification, wallet picker, and the bApp shell",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -40,6 +40,16 @@
       "require": {
         "types": "./dist/server.d.cts",
         "default": "./dist/server.cjs"
+      }
+    },
+    "./next": {
+      "import": {
+        "types": "./dist/next.d.ts",
+        "default": "./dist/next.js"
+      },
+      "require": {
+        "types": "./dist/next.d.cts",
+        "default": "./dist/next.cjs"
       }
     },
     "./element": {
@@ -97,7 +107,8 @@
     "README.md",
     "BRAND.md",
     "TRADEMARKS.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "keywords": [
     "bsv",
@@ -109,7 +120,11 @@
     "web-component",
     "sign-in-button",
     "bapp",
-    "app-shell"
+    "app-shell",
+    "nextjs",
+    "react",
+    "payments",
+    "handcash-alternative"
   ],
   "engines": {
     "node": ">=20"
@@ -119,27 +134,38 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:live": "LIVE_RELAY=1 vitest run test/live-relay.test.ts",
-    "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build"
+    "prepublishOnly": "pnpm typecheck && pnpm lint && pnpm test && pnpm build",
+    "lint": "eslint src test"
   },
   "peerDependencies": {
     "@bsv/sdk": ">=2.2.0 <4",
-    "react": ">=18"
+    "react": ">=18",
+    "next": ">=14"
   },
   "devDependencies": {
     "@bsv/sdk": "^2.8.11",
+    "@eslint/js": "^9.39.5",
     "@types/node": "^26.6.4",
     "@types/react": "^19.3.0",
     "@types/ws": "^8.18.2",
+    "eslint": "^9.39.5",
     "happy-dom": "^20.14.5",
     "react": "^19.3.0",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
+    "typescript-eslint": "^8.71.1",
     "vitest": "^5.0.3",
     "ws": "^8.22.0"
   },
   "peerDependenciesMeta": {
     "react": {
       "optional": true
+    },
+    "next": {
+      "optional": true
     }
+  },
+  "dependencies": {
+    "qrcode-generator": "^1.5.2"
   }
 }

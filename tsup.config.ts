@@ -4,7 +4,7 @@ export default defineConfig([
   {
     // npm: ESM + CJS + types. @bsv/sdk and react stay peer dependencies.
     entry: {
-      index: 'src/index.ts', server: 'src/server.ts', element: 'src/define.ts', react: 'src/react.ts',
+      index: 'src/index.ts', server: 'src/server.ts', next: 'src/next.ts', element: 'src/define.ts', react: 'src/react.ts',
       shell: 'src/shell/index.ts', 'shell-react': 'src/shell/react.ts',
     },
     format: ['esm', 'cjs'],
@@ -12,7 +12,7 @@ export default defineConfig([
     clean: true,
     sourcemap: true,
     target: 'es2022',
-    external: ['@bsv/sdk', 'react'],
+    external: ['@bsv/sdk', 'react', 'next', 'next/headers'],
   },
   {
     // One <script> tag: window.bWalletXConnect with @bsv/sdk bundled in, and <bwalletx-signin> registered.
