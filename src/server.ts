@@ -27,9 +27,14 @@ let warned = false;
  * server processes or serverless instances. Expired entries are pruned on each put.
  */
 export function memoryStore(opts: { quiet?: boolean } = {}): NonceStore {
-  if (!opts.quiet && !warned) {
+  const prod = typeof process !== 'undefined' && process.env?.NODE_ENV === 'production';
+  if ((prod || !opts.quiet) && !warned) {
     warned = true;
-    console.warn('[@bwalletx/connect] Using the in-memory nonce store. It is for development only; pass a shared store (Redis, database) in production.');
+    console.warn(
+      prod
+        ? '[@bwalletx/connect] WARNING: the in-memory nonce store is running in production. It is not shared between instances and breaks on serverless. Use redisStore or pgStore.'
+        : '[@bwalletx/connect] Using the in-memory nonce store. It is for development only; pass a shared store (redisStore, pgStore) in production.',
+    );
   }
   const m = new Map<string, PendingChallenge>();
   return {
@@ -171,3 +176,12 @@ export function originAllowed(requestOrigin: string | null | undefined, origin: 
     return false;
   }
 }
+
+export { redisStore, pgStore, pgNonceTableSql } from './nonce-stores.js';
+export type { RedisLike, RedisStoreOptions, PgQuery, PgStoreOptions } from './nonce-stores.js';
+export { signSession, verifySession, serializeCookie, readCookie, MIN_SECRET_LENGTH } from './session.js';
+export type { SessionPayload, SignSessionOptions, CookieOptions } from './session.js';
+export { verifyPayment, PaymentVerificationError } from './verify-payment.js';
+export type { VerifyPaymentOptions, VerifyPaymentResult, ExpectedOutput, TxStatus } from './verify-payment.js';
+export { linkIdentity, signInOrLink, IdentityLinkConflictError } from './link.js';
+export type { LinkCallbacks, LinkResult, SignInOrLinkOptions, SignInOrLinkResult } from './link.js';
