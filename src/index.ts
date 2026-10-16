@@ -15,3 +15,7 @@ export { discoverWallets, brc100Option, pairingOption, handcashAdapter } from '.
 export type { WalletOption, ConnectedWallet, WalletKind, DiscoverWalletsOptions, HandCashAdapterOptions } from './wallets.js';
 export { pairingModal, pickWallet, qrSvg } from './modal.js';
 export type { PairingModalOptions } from './modal.js';
+export { requestAccess, proveHoldings, toAccessError, throwIfAccessError } from './access-client.js';
+export type { RequestAccessOptions, RequestAccessResult, AccessChallengeLike } from './access-client.js';
+export { ACCESS_PROTOCOL, ACCESS_VERSION, AccessError, PROTOCOL_MEDIA, protocolMediaUrl, accessErrorMessage, canonicalJson, ACCESS_ERROR_STATUS } from './access.js';
+export type { AccessKind, AccessRequirement, TokenRequirement, AccessChallenge, AccessResponse, HoldingProof, AccessErrorCode, AccessErrorBody } from './access.js';

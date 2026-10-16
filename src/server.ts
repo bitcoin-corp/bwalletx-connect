@@ -185,3 +185,6 @@ export { verifyPayment, PaymentVerificationError } from './verify-payment.js';
 export type { VerifyPaymentOptions, VerifyPaymentResult, ExpectedOutput, TxStatus } from './verify-payment.js';
 export { linkIdentity, signInOrLink, IdentityLinkConflictError } from './link.js';
 export type { LinkCallbacks, LinkResult, SignInOrLinkOptions, SignInOrLinkResult } from './link.js';
+export * from './access.js';
+export { createAccessChallenge, verifyAccess, verifyHoldingProof, checkTokenHolding, oneSatResolver, bitSignResolver } from './access-server.js';
+export type { AccessResolver, IdentityStatus, OneSatResolverOptions, BitSignResolverOptions, CreateAccessChallengeOptions, AccessChallengeResponse, VerifyAccessOptions, AccessGrant } from './access-server.js';

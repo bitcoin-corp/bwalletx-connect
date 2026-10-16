@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0 (unreleased)
+
+- **Access protocol v1 ($401 identity / $403 token-gated access)**, spec in `docs/ACCESS-PROTOCOL.md`. Standard BRC-100 calls only, so any BRC-100 wallet works.
+- Client: `requestAccess()` signs the site's challenge and proves the keys that hold the token (`proveHoldings()`). Errors are `AccessError` with a protocol code.
+- Server: `createAccessChallenge`, `verifyAccess`, `checkTokenHolding`, plus `oneSatResolver()` (1Sat indexer) and `bitSignResolver()` (identity level / KYC). Fails closed: an indexer outage is `indexer_unavailable`, never a grant.
+- Next.js: `createBwalletXAccess()` gives challenge, verify, status and logout routes, a signed access cookie, and `getAccess()`, which re-checks holdings every `recheckEvery` seconds so selling the tokens ends access.
+- `<bwalletx-signin require-token="bsv21:…" min="100">` runs the access flow and emits `bwalletx-access-granted` / `bwalletx-access-denied`.
+- Protocol videos and posters in `assets/protocol/` (401 green, 402 blue, 403 red), exported as `PROTOCOL_MEDIA`.
+
 ## 0.4.1 (2026-10-12)
 
 - React: `BwalletXProvider` and `BwalletxSignin` declare `ReactElement` return types, so they type-check as JSX under React 18 `@types/react`.

@@ -15,6 +15,8 @@
  *   loading       show the spinner and set aria-busy
  *   disabled      disable the button
  *   challenge-url / verify-url   run the sign-in flow on click (POST JSON, as in the README)
+ *   require-token / min / min-bps with challenge-url: run the $403 access flow instead; emits
+ *                                bwalletx-access-granted or bwalletx-access-denied { code, have, need }
  *   get-url       where "Get bWalletX" points. Default https://bwalletx.com/get
  *   web-url       the web wallet. Default https://web.bwalletx.com
  *   discover-ms   how long to wait for the wallet to answer. Default 1200
@@ -30,6 +32,8 @@
  */
 import { discoverBwalletX } from './discover.js';
 import { signInWithBwalletX, type Challenge } from './signin.js';
+import { requestAccess, type AccessChallengeLike } from './access-client.js';
+import { AccessError } from './access.js';
 
 export const SIGNIN_TAG = 'bwalletx-signin';
 export const GET_URL = 'https://bwalletx.com/get';
@@ -143,6 +147,12 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
   return data as T;
 }
 
+/** POST that returns the body even on 4xx, so access error codes reach requestAccess. */
+async function postAccess(url: string, body: unknown): Promise<unknown> {
+  const res = await fetch(url, { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  return res.json().catch(() => ({ error: 'bad_request', message: `HTTP ${res.status}` }));
+}
+
 const OBSERVED = ['size', 'theme', 'label', 'brand', 'subtitle', 'loading', 'disabled', 'full-width', 'aria-label', 'get-url', 'web-url'];
 
 /** The element class. Created lazily so importing this module on a server is harmless. */
@@ -223,6 +233,27 @@ function createClass(): CustomElementConstructor {
         if (!found) {
           this.#notFound = true;
           this.#emit('bwalletx-not-found');
+          if (this.#attr('require-token')) this.#emit('bwalletx-access-denied', { code: 'not_installed', message: 'No wallet found' });
+          return;
+        }
+        const requireToken = this.#attr('require-token');
+        if (requireToken) {
+          // $403 gate. The server's own config is authoritative; these attributes are passed along as a hint.
+          const verifyUrl = this.#attr('verify-url');
+          const min = this.#attr('min');
+          const minBps = this.#attr('min-bps');
+          const hint = { token: { id: requireToken, ...(minBps ? { minBps: Number(minBps) } : { min: min ?? '1' }) } };
+          try {
+            const a = await requestAccess({
+              wallet: found.wallet,
+              challenge: (identityKey) => postJson<AccessChallengeLike>(challengeUrl, { identityKey, require: hint }),
+              verify: verifyUrl ? (response) => postAccess(verifyUrl, response) : undefined,
+            });
+            this.#emit('bwalletx-access-granted', { identityKey: a.response.identityKey, response: a.verified });
+          } catch (e) {
+            const err = e instanceof AccessError ? e : new AccessError('bad_request', String(e));
+            this.#emit('bwalletx-access-denied', { code: err.code, message: err.message, have: err.have, need: err.need });
+          }
           return;
         }
         const r = await signInWithBwalletX({ wallet: found.wallet, challenge: (identityKey) => postJson<Challenge>(challengeUrl, { identityKey }) });
