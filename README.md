@@ -189,7 +189,7 @@ Events (bubbling, composed): `bwalletx-signin` on every click (call `preventDefa
 
 Without `challenge-url`, `href` or `authorize-url` the button only fires `bwalletx-signin`. The built-in flow uses the extension or in-app browser only. For phone pairing, listen for `bwalletx-signin`, call `preventDefault()`, and call `signInWithBwalletX` with `pairing` as shown above.
 
-SVG files, and an HTML/CSS version with no JavaScript, are in `assets/`. All variants: `examples/buttons.html`. Placement, sizes and do/don't: [BRAND.md](./BRAND.md). The names and logo are not MIT licensed: [TRADEMARKS.md](./TRADEMARKS.md).
+SVG files, and an HTML/CSS version with no JavaScript, are in `assets/`. All variants: `examples/buttons.html`. Placement, sizes and do/don't: [BRAND.md](./BRAND.md). The names and logo are not covered by the code licence: [TRADEMARKS.md](./TRADEMARKS.md).
 
 ## Server
 
@@ -397,4 +397,4 @@ To test your own server without a wallet, sign with `new ProtoWallet(PrivateKey.
 
 ## License
 
-MIT
+From the next release, the code is under the [Open BSV License Version 6](./LICENSE): it may only be used with the Bitcoin SV (BSV) blockchain. Versions already published to npm (up to 0.5.0) were released under MIT and stay MIT. The protocol specs in `docs/` are [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Bundled third-party code (e.g. `qrcode-generator`, MIT) keeps its own licence. Names and logo: [TRADEMARKS.md](./TRADEMARKS.md). Details: [NOTICE](./NOTICE).

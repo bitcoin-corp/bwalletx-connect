@@ -1,5 +1,7 @@
 # bWalletX access protocol, v1 ($401 / $402 / $403)
 
+> Licence: this specification is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Implementations may use any licence.
+
 "Sign in with bWalletX, holding N of token X." A site's server issues a challenge, the wallet signs
 it with standard BRC-100 calls, and the server verifies the signature and the holdings against an
 indexer. Any BRC-100 wallet can answer. bWalletX recognises the protocol ID and shows the right

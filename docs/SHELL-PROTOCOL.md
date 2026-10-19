@@ -1,5 +1,7 @@
 # bApp shell protocol (`bapp:*` messages)
 
+> Licence: this specification is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Implementations may use any licence.
+
 How a bApp and bWalletX talk when the app runs inside the wallet. The web package
 (`@bwalletx/connect/shell`, `ShellBridge`) implements the app side. Version 1.
 

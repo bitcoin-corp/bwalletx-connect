@@ -1,0 +1,12 @@
+@bwalletx/connect
+Copyright (c) 2026 The Bitcoin Corporation Ltd
+
+- Code: Open BSV License Version 6 (file LICENSE), from the first release after
+  0.5.0. It may only be used with the Bitcoin SV (BSV) blockchain; read LICENSE
+  for the actual terms.
+- Versions 0.5.0 and earlier were published to npm under MIT and remain MIT.
+- Specifications in docs/: Creative Commons Attribution 4.0 (CC BY 4.0).
+- Bundled third-party code (for example qrcode-generator, MIT) keeps its own
+  licence.
+- The bWalletX and bWallet names and the gold "b" mark are trademarks and are
+  not licensed: see TRADEMARKS.md.
