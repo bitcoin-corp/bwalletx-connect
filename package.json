@@ -2,7 +2,7 @@
   "name": "@bwalletx/connect",
   "version": "0.5.0",
   "description": "Sign in with bWalletX or any BRC-100 wallet: button, React provider, Next.js sessions, nonce stores, pay/tip helpers, payment verification, wallet picker, and the bApp shell",
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/bitcoin-corp/bwalletx-connect.git"
@@ -108,6 +108,7 @@
     "BRAND.md",
     "TRADEMARKS.md",
     "LICENSE",
+    "NOTICE",
     "CHANGELOG.md"
   ],
   "keywords": [
