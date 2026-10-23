@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bwalletx.com/schema/bwallet-theme.schema.json",
+  "title": "bWalletX site theme (/.well-known/bwalletx-theme.json, v2)",
+  "description": "What bWalletX looks like on this site's approval sheets once the user has connected. Colours #RRGGBB only; images same-origin (logo <= 64 KB, cardArt <= 256 KB; png, jpeg, webp, gif, svg); file <= 8 KB. The wallet also enforces contrast: text >= 4.5:1 on bg and surface (else swapped for black/white or refused), accent >= 3:1 on bg (else refused). The wallet's origin strip, amounts, recipients and Approve/Deny are never themed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "mode",
+    "accent",
+    "bg",
+    "surface",
+    "text"
+  ],
+  "$defs": {
+    "hex": {
+      "type": "string",
+      "pattern": "^#[0-9a-fA-F]{6}$"
+    },
+    "image": {
+      "type": "string",
+      "maxLength": 512,
+      "description": "A path ('/brand/logo.png') or an https URL on the same origin as this file.",
+      "pattern": "^(/(?![/\\\\])|https://)[^\\s\\\\]*$"
+    }
+  },
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "v": {
+      "const": 2
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "description": "Plain words; no links, markup or addresses."
+    },
+    "mode": {
+      "enum": [
+        "dark",
+        "light"
+      ]
+    },
+    "accent": {
+      "$ref": "#/$defs/hex"
+    },
+    "accentHi": {
+      "$ref": "#/$defs/hex"
+    },
+    "bg": {
+      "$ref": "#/$defs/hex"
+    },
+    "surface": {
+      "$ref": "#/$defs/hex"
+    },
+    "text": {
+      "$ref": "#/$defs/hex"
+    },
+    "logo": {
+      "$ref": "#/$defs/image"
+    },
+    "cardArt": {
+      "$ref": "#/$defs/image"
+    }
+  }
+}
