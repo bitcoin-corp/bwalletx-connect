@@ -20,3 +20,5 @@ export type { RequestAccessOptions, RequestAccessResult, AccessChallengeLike } f
 export { ACCESS_PROTOCOL, ACCESS_VERSION, AccessError, PROTOCOL_MEDIA, protocolMediaUrl, accessErrorMessage, canonicalJson, ACCESS_ERROR_STATUS } from './access.js';
 export type { AccessKind, AccessRequirement, TokenRequirement, AccessChallenge, AccessResponse, HoldingProof, AccessErrorCode, AccessErrorBody } from './access.js';
 export { declareWalletTheme, WALLET_THEME_META } from './theme.js';
+export { requestSpendingAuthorization, revokeSpendingAuthorization, supportsSpendingAuthorization, SpendingAuthorizationError, STREAM_PROTOCOL } from './spending.js';
+export type { SpendingAuthorizationRequest, SpendingAuthorizationGrant, SpendingAuthorizationErrorCode } from './spending.js';
