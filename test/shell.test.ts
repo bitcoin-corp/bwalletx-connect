@@ -68,6 +68,12 @@ describe('manifest', () => {
     expect(bad((m) => { m.script = '/x.js'; }).errors.join()).toMatch(/unknown field "script"/);
     expect(bad((m) => { m.theme = { accent: 'red' }; }).ok).toBe(false);
     expect(bad((m) => { m.theme = { accent: '#00FF00' }; }).ok).toBe(true);
+    // Site theme fields (schema/bwallet-theme.schema.json)
+    expect(bad((m) => { m.theme = { accent: '#E8B04A', bg: '#0F2A1F', surface: '#173A2C', text: '#F5EBDD', mode: 'dark', logo: '/logo.png' }; }).ok).toBe(true);
+    expect(bad((m) => { m.theme = { bg: 'black' }; }).ok).toBe(false);
+    expect(bad((m) => { m.theme = { mode: 'auto' }; }).ok).toBe(false);
+    expect(bad((m) => { m.theme = { logo: 'https://evil.example/x.png' }; }).ok).toBe(false);
+    expect(bad((m) => { m.theme = { css: 'body{}' }; }).ok).toBe(false);
     expect(validateManifest(null).ok).toBe(false);
     expect(() => parseManifest({})).toThrow(/Invalid bapp.json/);
   });

@@ -5,7 +5,12 @@
   "description": "Declares a bApp's five scoped slots (Wallet, Exchange, (b), Feed, Chat), its drawer and like-to-fund config. All paths are same-origin. Validate in code with validateManifest() from @bwalletx/connect/shell, which also enforces the rules JSON Schema cannot (URL origin check, amount <= cap).",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "name", "icon", "slots"],
+  "required": [
+    "version",
+    "name",
+    "icon",
+    "slots"
+  ],
   "$defs": {
     "path": {
       "type": "string",
@@ -16,42 +21,136 @@
     "slot": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["enabled"],
+      "required": [
+        "enabled"
+      ],
       "properties": {
-        "path": { "$ref": "#/$defs/path" },
-        "label": { "type": "string", "minLength": 1, "maxLength": 12 },
-        "enabled": { "type": "boolean", "description": "false = greyed out and not clickable. Slots are never hidden." }
+        "path": {
+          "$ref": "#/$defs/path"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 12
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "false = greyed out and not clickable. Slots are never hidden."
+        }
       }
     },
     "pathSlot": {
       "allOf": [
-        { "$ref": "#/$defs/slot" },
-        { "if": { "properties": { "enabled": { "const": true } } }, "then": { "required": ["path"] } }
+        {
+          "$ref": "#/$defs/slot"
+        },
+        {
+          "if": {
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "path"
+            ]
+          }
+        }
       ]
     },
-    "fieldName": { "type": "string", "minLength": 1, "maxLength": 64 }
+    "fieldName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    }
   },
   "properties": {
-    "$schema": { "type": "string" },
-    "version": { "const": 1 },
-    "name": { "type": "string", "minLength": 1, "maxLength": 40 },
-    "icon": { "$ref": "#/$defs/path" },
-    "home": { "$ref": "#/$defs/path", "default": "/" },
+    "$schema": {
+      "type": "string"
+    },
+    "version": {
+      "const": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 40
+    },
+    "icon": {
+      "$ref": "#/$defs/path"
+    },
+    "home": {
+      "$ref": "#/$defs/path",
+      "default": "/"
+    },
     "theme": {
       "type": "object",
       "additionalProperties": false,
-      "properties": { "accent": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$", "default": "#FFD24D" } }
+      "description": "Site theme: what bWalletX looks like on this site's approval sheets once the user has connected (bwallet docs/SITE-THEME.md). Same fields as bwallet-theme.schema.json minus v and name (name comes from the manifest).",
+      "properties": {
+        "accent": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$",
+          "default": "#FFD24D"
+        },
+        "accentHi": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "bg": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "surface": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "text": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "mode": {
+          "enum": [
+            "dark",
+            "light"
+          ]
+        },
+        "logo": {
+          "$ref": "#/$defs/path"
+        },
+        "cardArt": {
+          "$ref": "#/$defs/path"
+        }
+      }
     },
     "slots": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["wallet", "exchange", "b", "feed", "chat"],
+      "required": [
+        "wallet",
+        "exchange",
+        "b",
+        "feed",
+        "chat"
+      ],
       "properties": {
-        "wallet": { "$ref": "#/$defs/pathSlot" },
-        "exchange": { "$ref": "#/$defs/pathSlot" },
-        "b": { "$ref": "#/$defs/slot" },
-        "feed": { "$ref": "#/$defs/pathSlot" },
-        "chat": { "$ref": "#/$defs/pathSlot" }
+        "wallet": {
+          "$ref": "#/$defs/pathSlot"
+        },
+        "exchange": {
+          "$ref": "#/$defs/pathSlot"
+        },
+        "b": {
+          "$ref": "#/$defs/slot"
+        },
+        "feed": {
+          "$ref": "#/$defs/pathSlot"
+        },
+        "chat": {
+          "$ref": "#/$defs/pathSlot"
+        }
       }
     },
     "drawer": {
@@ -60,11 +159,22 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["label", "path"],
+        "required": [
+          "label",
+          "path"
+        ],
         "properties": {
-          "label": { "type": "string", "minLength": 1, "maxLength": 40 },
-          "path": { "$ref": "#/$defs/path" },
-          "icon": { "$ref": "#/$defs/path" }
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          },
+          "path": {
+            "$ref": "#/$defs/path"
+          },
+          "icon": {
+            "$ref": "#/$defs/path"
+          }
         }
       }
     },
@@ -72,23 +182,53 @@
       "type": "object",
       "description": "Like-to-fund config (config only in Phase 1). A Like is a small purchase of the item's utility token.",
       "additionalProperties": false,
-      "required": ["fields"],
+      "required": [
+        "fields"
+      ],
       "properties": {
         "fields": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["id", "token"],
+          "required": [
+            "id",
+            "token"
+          ],
           "properties": {
-            "id": { "$ref": "#/$defs/fieldName" },
-            "token": { "$ref": "#/$defs/fieldName" },
-            "payee": { "$ref": "#/$defs/fieldName" },
-            "title": { "$ref": "#/$defs/fieldName" },
-            "media": { "$ref": "#/$defs/fieldName" }
+            "id": {
+              "$ref": "#/$defs/fieldName"
+            },
+            "token": {
+              "$ref": "#/$defs/fieldName"
+            },
+            "payee": {
+              "$ref": "#/$defs/fieldName"
+            },
+            "title": {
+              "$ref": "#/$defs/fieldName"
+            },
+            "media": {
+              "$ref": "#/$defs/fieldName"
+            }
           }
         },
-        "amountCents": { "type": "integer", "minimum": 1, "default": 1 },
-        "currency": { "enum": ["PNEE", "BSV"], "default": "PNEE" },
-        "dailyCapCents": { "type": "integer", "minimum": 1, "maximum": 100, "default": 100 }
+        "amountCents": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        },
+        "currency": {
+          "enum": [
+            "PNEE",
+            "BSV"
+          ],
+          "default": "PNEE"
+        },
+        "dailyCapCents": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 100
+        }
       }
     }
   }

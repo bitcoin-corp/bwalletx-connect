@@ -37,6 +37,15 @@ export interface BappLikeConfig {
 export interface BappTheme {
   /** Active/accent colour, #RRGGBB. Default #FFD24D. */
   accent?: string;
+  /** The rest is the site theme bWalletX wears on this site's approval sheets once connected (#RRGGBB). */
+  accentHi?: string;
+  bg?: string;
+  surface?: string;
+  text?: string;
+  mode?: 'dark' | 'light';
+  /** Same-origin image paths (logo ≤ 64 KB, card art ≤ 256 KB). */
+  logo?: string;
+  cardArt?: string;
 }
 
 export interface BappManifest {
@@ -97,10 +106,28 @@ export function validateManifest(input: unknown): ValidationResult {
   if (m.theme !== undefined) {
     if (!isObj(m.theme)) errors.push('theme must be an object');
     else {
-      for (const k of Object.keys(m.theme)) if (k !== 'accent') errors.push(`unknown field "theme.${k}"`);
-      if (m.theme.accent !== undefined && !(typeof m.theme.accent === 'string' && /^#[0-9a-fA-F]{6}$/.test(m.theme.accent)))
-        errors.push('theme.accent must be #RRGGBB');
-      theme = m.theme.accent ? { accent: m.theme.accent as string } : {};
+      // Site theme (bWalletX docs/SITE-THEME.md, schema/bwallet-theme.schema.json): colours #RRGGBB, mode, same-origin images.
+      const t = m.theme;
+      const COLOURS = ['accent', 'accentHi', 'bg', 'surface', 'text'] as const;
+      for (const k of Object.keys(t))
+        if (!(COLOURS as readonly string[]).includes(k) && k !== 'mode' && k !== 'logo' && k !== 'cardArt')
+          errors.push(`unknown field "theme.${k}"`);
+      const out: BappTheme = {};
+      for (const k of COLOURS) {
+        if (t[k] === undefined) continue;
+        if (typeof t[k] === 'string' && /^#[0-9a-fA-F]{6}$/.test(t[k] as string)) out[k] = t[k] as string;
+        else errors.push(`theme.${k} must be #RRGGBB`);
+      }
+      if (t.mode !== undefined) {
+        if (t.mode === 'dark' || t.mode === 'light') out.mode = t.mode;
+        else errors.push('theme.mode must be "dark" or "light"');
+      }
+      for (const k of ['logo', 'cardArt'] as const) {
+        if (t[k] === undefined) continue;
+        if (isSameOriginPath(t[k])) out[k] = t[k] as string;
+        else errors.push(`theme.${k} must be a same-origin path starting with "/"`);
+      }
+      theme = out;
     }
   }
 
