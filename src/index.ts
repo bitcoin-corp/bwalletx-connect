@@ -3,7 +3,7 @@ export type { FoundWallet, FoundBy } from './discover.js';
 export { pairBwalletX, restorePairing, clearPairing } from './pair.js';
 export type { PairingOptions, PairConnectionOptions, PairStorage, PairedWallet, SocketLike, SocketFactory } from './pair.js';
 export { signInWithBwalletX, connectBwalletX, LOGIN_PROTOCOL } from './signin.js';
-export type { Challenge, SignInOptions, SignInResult, SignInMethod } from './signin.js';
+export type { Challenge, SignInOptions, SignInResult, SignInMethod, SignInStage } from './signin.js';
 export { renderButton, LOGO_URL } from './button.js';
 export type { ButtonOptions } from './button.js';
 export { inOrder } from './in-order.js';
@@ -19,3 +19,4 @@ export { requestAccess, proveHoldings, toAccessError, throwIfAccessError } from 
 export type { RequestAccessOptions, RequestAccessResult, AccessChallengeLike } from './access-client.js';
 export { ACCESS_PROTOCOL, ACCESS_VERSION, AccessError, PROTOCOL_MEDIA, protocolMediaUrl, accessErrorMessage, canonicalJson, ACCESS_ERROR_STATUS } from './access.js';
 export type { AccessKind, AccessRequirement, TokenRequirement, AccessChallenge, AccessResponse, HoldingProof, AccessErrorCode, AccessErrorBody } from './access.js';
+export { declareWalletTheme, WALLET_THEME_META } from './theme.js';
