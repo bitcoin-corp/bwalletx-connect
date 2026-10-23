@@ -62,13 +62,29 @@ export async function connectBwalletX(
 export async function signInWithBwalletX(opts: SignInOptions): Promise<SignInResult> {
   const { wallet, method } = await connectBwalletX(opts);
   if (method !== 'pairing') await wallet.waitForAuthentication({}).catch(() => {});
-  const { publicKey: identityKey } = await wallet.getPublicKey({ identityKey: true });
-  const c = await opts.challenge(identityKey);
-  const { signature } = await wallet.createSignature({
-    protocolID: c.protocolID ?? LOGIN_PROTOCOL,
-    keyID: c.keyID,
-    counterparty: 'anyone',
-    data: Array.from(new TextEncoder().encode(c.message)),
-  });
+  const { publicKey: identityKey } = await atStage('identity', () => wallet.getPublicKey({ identityKey: true }));
+  const c = await atStage('challenge', () => opts.challenge(identityKey));
+  const { signature } = await atStage('signature', () =>
+    wallet.createSignature({
+      protocolID: c.protocolID ?? LOGIN_PROTOCOL,
+      keyID: c.keyID,
+      counterparty: 'anyone',
+      data: Array.from(new TextEncoder().encode(c.message)),
+    }),
+  );
   return { identityKey, signature: Array.from(signature), nonce: c.nonce, method, wallet };
+}
+
+/** Where a sign-in failed: the wallet's identity prompt, the site's challenge endpoint, or the wallet's signature. */
+export type SignInStage = 'identity' | 'challenge' | 'signature' | 'verify';
+
+/** Tags a failure with its stage (err.stage), keeping the original message, so a site can say what actually failed. */
+export async function atStage<T>(stage: SignInStage, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (e) {
+    const err = e instanceof Error ? e : new Error(String(e));
+    if (!(err as { stage?: string }).stage) Object.assign(err, { stage });
+    throw err;
+  }
 }

@@ -21,7 +21,8 @@ import {
 } from 'react';
 import type { WalletInterface } from '@bsv/sdk';
 import { clearPairing } from './pair.js';
-import { signInWithBwalletX, type Challenge } from './signin.js';
+import { declareWalletTheme } from './theme.js';
+import { atStage, signInWithBwalletX, type Challenge } from './signin.js';
 import { pairingModal } from './modal.js';
 import { pickWallet } from './modal.js';
 import { discoverWallets, type ConnectedWallet, type WalletOption } from './wallets.js';
@@ -165,6 +166,11 @@ export interface BwalletXProviderProps {
   extraWallets?: WalletOption[];
   /** Probe desktop wallets on localhost. Default false. */
   probeLocal?: boolean;
+  /**
+   * A theme the wallet already bundles (e.g. 'npgx') for bWalletX to wear while this site is connected and is the
+   * active tab. Declared only while connecting or connected; withdrawn on disconnect. See declareWalletTheme.
+   */
+  theme?: string;
   discoverMs?: number;
   payOptions?: PayOptions;
   onError?: (e: Error) => void;
@@ -197,6 +203,13 @@ export function BwalletXProvider(p: BwalletXProviderProps): ReactElement {
     props.current.onError?.(err);
     return err;
   }, []);
+
+  const themeOn = !!p.theme && (state.status === 'connecting' || state.status === 'connected');
+  useEffect(() => {
+    if (!themeOn) return;
+    declareWalletTheme(p.theme);
+    return () => declareWalletTheme(null);
+  }, [themeOn, p.theme]);
 
   useEffect(() => {
     const url = p.sessionUrl;
@@ -255,7 +268,7 @@ export function BwalletXProvider(p: BwalletXProviderProps): ReactElement {
             wallet: cw.wallet,
             challenge: (identityKey) => postJson(c.challengeUrl!, { identityKey }) as unknown as Promise<Challenge>,
           });
-          const v = await postJson(c.verifyUrl, { identityKey: r.identityKey, nonce: r.nonce, signature: r.signature });
+          const v = await atStage('verify', () => postJson(c.verifyUrl!, { identityKey: r.identityKey, nonce: r.nonce, signature: r.signature }));
           handle = (v.handle as string | undefined) ?? handle;
           paymail = (v.paymail as string | undefined) ?? paymail;
           signedIn = true;
