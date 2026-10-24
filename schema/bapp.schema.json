@@ -122,6 +122,24 @@
         },
         "cardArt": {
           "$ref": "#/$defs/path"
+        },
+        "room": {
+          "type": "string",
+          "pattern": "^[A-Z0-9]{1,20}$",
+          "description": "A chat-room ticker the wallet already knows (bwallet #101). When the site connects, bWalletX opens this room, with a short balance card above it. Allowed in the root theme or a sub-theme."
+        },
+        "paths": {
+          "type": "object",
+          "maxProperties": 8,
+          "description": "Sub-themes for parts of the site (bwallet #100). Key: a path prefix starting with '/'. Value: a same-origin .json file under /.well-known/ with a v2 theme. The wallet uses the longest prefix that matches the page path on a '/' boundary; a sub-theme that fails, or a request whose page path is unknown, falls back to this root theme.",
+          "propertyNames": {
+            "pattern": "^/[^\\s?#]*$",
+            "maxLength": 128
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^/\\.well-known/[A-Za-z0-9._-]+\\.json$"
+          }
         }
       }
     },

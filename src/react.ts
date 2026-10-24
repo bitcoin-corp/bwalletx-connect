@@ -290,6 +290,8 @@ export function BwalletXProvider(p: BwalletXProviderProps): ReactElement {
     if (state.walletId === 'bwalletx-pairing') await clearPairing();
     payer.current = null;
     setState(empty);
+    // Tell bWalletX the site disconnected, so the next connect re-asks instead of answering silently (bwallet #98).
+    if (typeof window !== 'undefined') window.postMessage({ type: 'bwallet:disconnect' }, window.location.origin);
   }, [state.walletId]);
 
   const need = () => {
