@@ -1,6 +1,6 @@
 {
   "name": "@bwalletx/connect",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Sign in with bWalletX or any BRC-100 wallet: button, React provider, Next.js sessions, nonce stores, pay/tip helpers, payment verification, wallet picker, and the bApp shell",
   "license": "MIT",
   "repository": {
