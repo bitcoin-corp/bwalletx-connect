@@ -110,7 +110,9 @@ await buyToken(wallet, { token: '$BOASE', amount: 100, quote: (q) => fetch('/api
 
 Each call makes one `createAction`, and nothing is ever retried. Failures throw a `PaymentError` with a `code` (`BAD_REQUEST`, `RESOLVE_FAILED`, `RATE_FAILED`, `WALLET_REJECTED`, `WALLET_ERROR`, `NOT_SUPPORTED`). When `maybeSent` is true, the wallet may already have broadcast the payment, so check before you ask the user again. Browsers often can't resolve paymails themselves because of CORS, so pass `resolvePaymail` to do it on your server.
 
-On the server, check the payment before you deliver anything:
+**Verify payments on your server.** A txid or BEEF that comes back to the page is only what the page was told: a
+browser extension, a modified page or (before 0.5.2) a parent frame posing as the wallet can return a fake one.
+Deliver nothing until your server has checked the payment:
 
 ```ts
 import { verifyPayment } from '@bwalletx/connect/server';

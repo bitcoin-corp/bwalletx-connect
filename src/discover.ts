@@ -1,4 +1,4 @@
-import { WalletClient, type WalletInterface } from '@bsv/sdk';
+import { WalletClient, XDM, type WalletInterface } from '@bsv/sdk';
 
 /** Ids bWalletX announces in BRC-100 wallet discovery. */
 export const RDNS_EXTENSION = 'com.bwalletx.extension';
@@ -65,10 +65,48 @@ const isFramed = (): boolean => {
   }
 };
 
-/** The parent frame's wallet over BRC-100 XDM, or null when it does not answer within `ms`. */
-export async function probeXdm(ms = 1200): Promise<WalletInterface | null> {
+/**
+ * The only parents that may answer as bWalletX over XDM (security audit 25 Oct 2026). Without this, any page that
+ * framed a site using this package became "the wallet": it saw every call (payments, sign-in challenges) and could
+ * answer with a fake txid. The wallet's own frames: the web wallet, bwallet.space, the iOS/Android app shells and
+ * the Chrome extension. Payments must still be checked on your server (verifyPayment), never trusted from the page.
+ */
+export const BWALLETX_PARENT_ORIGINS: readonly string[] = [
+  'https://web.bwalletx.com',
+  'https://desktop.bwalletx.com',
+  'https://bwalletx.com',
+  'https://www.bwallet.space',
+  'https://bwallet.space',
+  'capacitor://localhost', // iOS app shell
+  'https://localhost', // Android app shell
+  'tauri://localhost', // bWalletX Desktop (macOS)
+  'https://tauri.localhost', // bWalletX Desktop (Windows)
+  'chrome-extension://bombmmcjghjdlbmcclnhjodgcelnehgl', // bWalletX for Chrome (fixed id)
+];
+
+/** The parent frame's origin, as the browser reports it (ancestorOrigins, else the referrer), or null. */
+export const parentOrigin = (): string | null => {
   try {
-    const w = new WalletClient('XDM');
+    const anc = (window.location as Location & { ancestorOrigins?: DOMStringList }).ancestorOrigins;
+    if (anc && anc.length > 0) return anc[0] ?? null;
+    if (!document.referrer) return null;
+    // Not URL.origin: it is "null" for non-special schemes (capacitor:, chrome-extension:) in some engines.
+    const u = new URL(document.referrer);
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * The parent frame's wallet over BRC-100 XDM, or null when the parent is not bWalletX (BWALLETX_PARENT_ORIGINS) or
+ * does not answer within `ms`. Messages go to that exact origin and only its answers are taken.
+ */
+export async function probeXdm(ms = 1200, allowed: readonly string[] = BWALLETX_PARENT_ORIGINS): Promise<WalletInterface | null> {
+  const origin = parentOrigin();
+  if (!origin || !allowed.includes(origin)) return null;
+  try {
+    const w = new WalletClient(new XDM(origin) as unknown as WalletInterface);
     const ok = await Promise.race([
       w.isAuthenticated({}).then(
         () => true,

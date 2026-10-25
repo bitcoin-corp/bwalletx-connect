@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.2 (unreleased)
+
+- **Security: framed pages only ask bWalletX itself over XDM.** `findBwalletX` / `discoverBwalletX` in a frame used to post to whatever page framed it and take its answers, so any page that framed your site became "the wallet" (saw every call, could return a fake txid). Now the parent's origin (from `location.ancestorOrigins`, else the referrer) must be one of `BWALLETX_PARENT_ORIGINS` (web.bwalletx.com, bwallet.space, the iOS/Android/Desktop app shells, the Chrome extension); messages go to that exact origin and only its answers count. `probeXdm(ms, allowed)` takes your own list if you host the wallet elsewhere.
+- Docs: verify payments on your server (`verifyPayment`); never trust a txid from the page.
+
 ## 0.5.0 (unreleased)
 
 - **Site theme in the wallet**: `BwalletXProvider theme="npgx"` (or `declareWalletTheme('npgx')`) declares `<meta name="bwalletx-theme">` while connecting/connected and removes it on disconnect. bWalletX wears that theme for this origin only, from the themes it bundles (brand editions locked to their own sites); only the id is sent, never colours or CSS.
