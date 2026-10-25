@@ -1,4 +1,4 @@
-import type { WalletInterface } from '@bsv/sdk';
+import { WalletClient, type WalletInterface } from '@bsv/sdk';
 
 /** Ids bWalletX announces in BRC-100 wallet discovery. */
 export const RDNS_EXTENSION = 'com.bwalletx.extension';
@@ -40,7 +40,11 @@ export function discoverBwalletX(ms = 1200): Promise<FoundWallet | null> {
     window.dispatchEvent(new Event('brc100:requestWallet'));
     setTimeout(() => {
       const cwi = (window as unknown as { CWI?: WalletInterface }).CWI;
-      finish(cwi ? { wallet: cwi, method: 'in-app', rdns: null } : null);
+      if (cwi) return finish({ wallet: cwi, method: 'in-app', rdns: null });
+      // Inside bWalletX's in-wallet frame nothing is injected into the page: the wallet answers BRC-100 XDM
+      // (postMessage to the parent) instead. Only tried when framed, and only kept if the parent answers.
+      if (!isFramed()) return finish(null);
+      void probeXdm(ms).then((w) => finish(w ? { wallet: w, method: 'in-app', rdns: null } : null));
     }, ms);
   });
 }
@@ -51,4 +55,29 @@ export function discoverBwalletX(ms = 1200): Promise<FoundWallet | null> {
  */
 export async function findBwalletX(ms = 1200): Promise<WalletInterface | null> {
   return (await discoverBwalletX(ms))?.wallet ?? null;
+}
+
+const isFramed = (): boolean => {
+  try {
+    return window.parent !== window;
+  } catch {
+    return true;
+  }
+};
+
+/** The parent frame's wallet over BRC-100 XDM, or null when it does not answer within `ms`. */
+export async function probeXdm(ms = 1200): Promise<WalletInterface | null> {
+  try {
+    const w = new WalletClient('XDM');
+    const ok = await Promise.race([
+      w.isAuthenticated({}).then(
+        () => true,
+        () => false,
+      ),
+      new Promise<boolean>((r) => setTimeout(() => r(false), ms)),
+    ]);
+    return ok ? w : null;
+  } catch {
+    return null;
+  }
 }
