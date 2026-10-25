@@ -5,6 +5,7 @@
 import qrcode from 'qrcode-generator';
 import type { PairingOptions } from './pair.js';
 import type { WalletOption } from './wallets.js';
+import { WEB_WALLET_URL } from './element.js';
 
 const CSS = `
 .bwx-ov{position:fixed;inset:0;z-index:2147483000;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:16px;font:15px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
@@ -17,6 +18,9 @@ const CSS = `
 .bwx-row{display:flex;gap:8px;margin-top:14px}
 .bwx-btn{flex:1;border:1px solid #3a3220;background:#15130e;color:#f4f1e8;border-radius:10px;padding:10px 12px;font:inherit;cursor:pointer}
 .bwx-btn:hover{border-color:#e8c766}
+a.bwx-btn{display:block;text-align:center;text-decoration:none;box-sizing:border-box}
+.bwx-primary{background:linear-gradient(180deg,#fcd34d,#f59e0b);color:#000;border:0;font-weight:700;min-height:48px;padding:13px 12px}
+.bwx-stack{display:flex;flex-direction:column;gap:8px}
 .bwx-list{display:flex;flex-direction:column;gap:8px}
 .bwx-opt{display:flex;align-items:center;gap:10px;text-align:left}
 .bwx-opt img{width:24px;height:24px;border-radius:6px}
@@ -52,8 +56,33 @@ export function qrSvg(text: string): string {
   return q.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
 }
 
+
+/**
+ * True on a phone or tablet: a coarse pointer with no hover, or a mobile user agent (iPadOS reports
+ * a Mac UA, so touch points count too). Scanning a QR shown on the same screen is impossible there.
+ */
+export function isTouchDevice(env: { navigator?: Navigator; matchMedia?: (q: string) => MediaQueryList } = globalThis as never): boolean {
+  const nav = env.navigator;
+  if (!nav) return false;
+  const ua = nav.userAgent ?? '';
+  if (/Android|iPhone|iPad|iPod|Mobile|Silk|Kindle/i.test(ua)) return true;
+  if (/Macintosh/.test(ua) && (nav.maxTouchPoints ?? 0) > 1) return true;
+  try {
+    return !!env.matchMedia?.('(pointer: coarse)').matches && !env.matchMedia?.('(hover: hover)').matches;
+  } catch {
+    return false;
+  }
+}
+
 export interface PairingModalOptions {
   title?: string;
+  /**
+   * 'qr' shows the pairing QR (desktop). 'app' hands off to the bWalletX app on this device: the
+   * pairing link is a universal link / Android app link that opens the app, and the bwallet.space
+   * page behind it explains what to do when the app is not installed. Default 'auto': 'app' on touch
+   * devices, 'qr' elsewhere.
+   */
+  mode?: 'auto' | 'qr' | 'app';
   /** Called when the user closes the modal (the pairing is then aborted). */
   onCancel?: () => void;
 }
@@ -79,20 +108,39 @@ export function pairingModal(o: PairingModalOptions = {}): PairingOptions & { cl
       if (typeof document === 'undefined') return;
       close();
       ui = mount();
+      const app = o.mode === 'app' || ((o.mode ?? 'auto') === 'auto' && isTouchDevice());
       const h = el('h2', '', o.title ?? 'Connect bWalletX');
-      const p = el('p', '', 'Scan with bWalletX on your phone, or paste the link into web.bwalletx.com.');
-      const qr = el('div', 'bwx-qr');
-      qr.innerHTML = qrSvg(link);
-      codeEl = el('div', 'bwx-code', '');
-      codeEl.setAttribute('aria-live', 'polite');
-      const row = el('div', 'bwx-row');
-      const copy = el('button', 'bwx-btn', 'Copy link');
-      copy.onclick = () => void navigator.clipboard?.writeText(link).then(() => (copy.textContent = 'Copied'));
       const cancel = el('button', 'bwx-btn', 'Cancel');
       cancel.onclick = () => {
         o.onCancel?.();
         ac.abort();
       };
+      codeEl = el('div', 'bwx-code', '');
+      codeEl.setAttribute('aria-live', 'polite');
+      if (app) {
+        // Same device: no QR to scan. The link opens the bWalletX app (universal link); approve there,
+        // then come back to this tab, which is still waiting on the pairing channel.
+        const p = el('p', '', 'Open bWalletX, approve, then come back to this page.');
+        const stack = el('div', 'bwx-stack');
+        const open = el('a', 'bwx-btn bwx-primary', 'Open bWalletX');
+        open.href = link;
+        open.rel = 'noopener';
+        const web = el('button', 'bwx-btn', 'Use web.bwalletx.com instead');
+        web.onclick = () => {
+          void navigator.clipboard?.writeText(link).catch(() => undefined);
+          window.open(WEB_WALLET_URL, '_blank', 'noopener');
+          p.textContent = 'Link copied. In web.bwalletx.com tap Connect and paste it, then come back here.';
+        };
+        stack.append(open, web, cancel);
+        ui.box.append(h, p, codeEl, stack);
+        return;
+      }
+      const p = el('p', '', 'Scan with bWalletX on your phone, or paste the link into web.bwalletx.com.');
+      const qr = el('div', 'bwx-qr');
+      qr.innerHTML = qrSvg(link);
+      const row = el('div', 'bwx-row');
+      const copy = el('button', 'bwx-btn', 'Copy link');
+      copy.onclick = () => void navigator.clipboard?.writeText(link).then(() => (copy.textContent = 'Copied'));
       row.append(copy, cancel);
       ui.box.append(h, p, qr, codeEl, row);
     },

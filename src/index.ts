@@ -13,7 +13,7 @@ export { pay, tip, buyToken, amountInSats, resolvePaymailP2P, PaymentError, BRC2
 export type { PayRequest, PayResult, PayOptions, PayOutput, PaySource, LegacyPayer, Brc29Remittance, BuyTokenRequest, TokenQuote, PaymentErrorCode } from './pay.js';
 export { discoverWallets, brc100Option, pairingOption, handcashAdapter } from './wallets.js';
 export type { WalletOption, ConnectedWallet, WalletKind, DiscoverWalletsOptions, HandCashAdapterOptions } from './wallets.js';
-export { pairingModal, pickWallet, qrSvg } from './modal.js';
+export { isTouchDevice, pairingModal, pickWallet, qrSvg } from './modal.js';
 export type { PairingModalOptions } from './modal.js';
 export { requestAccess, proveHoldings, toAccessError, throwIfAccessError } from './access-client.js';
 export type { RequestAccessOptions, RequestAccessResult, AccessChallengeLike } from './access-client.js';

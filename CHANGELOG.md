@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.3 (unreleased)
+
+- **Phones get "Open bWalletX", not a QR.** On a touch device (`isTouchDevice()`), `pairingModal()` no longer shows a QR the user would have to scan with the same phone. It shows **Open bWalletX**, a link to the pairing universal link (`https://www.bwallet.space/pair?…`, the iOS universal link / Android app link the app already handles), plus **Use web.bwalletx.com instead** (copies the link and opens the web wallet to paste it), and the match code. The page keeps waiting on the pairing channel, so the user approves in the wallet and comes back. Desktops still get the QR. Force either with `pairingModal({ mode: 'qr' | 'app' })`.
+
 ## 0.5.2 (unreleased)
 
 - **Security: framed pages only ask bWalletX itself over XDM.** `findBwalletX` / `discoverBwalletX` in a frame used to post to whatever page framed it and take its answers, so any page that framed your site became "the wallet" (saw every call, could return a fake txid). Now the parent's origin (from `location.ancestorOrigins`, else the referrer) must be one of `BWALLETX_PARENT_ORIGINS` (web.bwalletx.com, bwallet.space, the iOS/Android/Desktop app shells, the Chrome extension); messages go to that exact origin and only its answers count. `probeXdm(ms, allowed)` takes your own list if you host the wallet elsewhere.

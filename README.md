@@ -136,7 +136,7 @@ Every expected output has to be matched by a different output that carries at le
 - phone pairing (`pairing: pairingModal()`)
 - any adapters you add in `extra`
 
-`pickWallet(list)` shows the picker. `pairingModal()` returns `PairingOptions` that draw the QR code and match code, so you no longer need your own QR library.
+`pickWallet(list)` shows the picker. `pairingModal()` returns `PairingOptions` that draw the QR code and match code, so you no longer need your own QR library. On phones and tablets it shows an **Open bWalletX** button (the pairing universal link opens the app) and a web.bwalletx.com fallback instead of a QR; pass `mode: 'qr'` or `'app'` to force one.
 
 ## Migrating from HandCash Connect
 
