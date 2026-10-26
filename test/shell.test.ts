@@ -58,7 +58,7 @@ describe('manifest', () => {
   });
 
   it('enforces like caps, version, unknown fields and theme', () => {
-    const bad = (patch: (m: any) => void) => { const m = clone(); patch(m); return validateManifest(m); };
+    const bad = (patch: (m: ReturnType<typeof clone>) => void) => { const m = clone(); patch(m); return validateManifest(m); };
     expect(bad((m) => { m.like.dailyCapCents = 500; }).errors.join()).toMatch(/\$1 max/);
     expect(bad((m) => { m.like.amountCents = 0; }).ok).toBe(false);
     expect(bad((m) => { m.like.amountCents = 50; m.like.dailyCapCents = 10; }).errors.join()).toMatch(/exceed/);

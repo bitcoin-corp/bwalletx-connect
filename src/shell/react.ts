@@ -28,7 +28,7 @@ interface Common {
   children?: ReactNode;
 }
 
-function useShell(tag: string, props: Common, attrs: Record<string, string | undefined>, events: Record<string, Handler<any> | undefined>) {
+function useShell(tag: string, props: Common, attrs: Record<string, string | undefined>, events: Record<string, Handler<never> | undefined>) {
   const ref = useRef<HTMLElement & { manifest: BappManifest | null }>(null);
   useEffect(() => { defineBappShell(); }, []);
   useEffect(() => { if (ref.current) ref.current.manifest = props.manifest; }, [props.manifest]);

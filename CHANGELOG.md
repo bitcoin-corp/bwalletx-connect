@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.4 (unreleased)
+
+- **Security: relay role claims for the site (b-Aware 26 Oct 2026, N3-1/N3-2).** `pairBwalletX` now opens the relay channel with its own random site claim and stores it with the pairing (`sc`); every reconnect sends it, so someone who learns the channel ID can no longer replace your socket or lock you out. It also sends `wc`, the SHA-256 of the wallet claim only the QR can produce (`walletClaimFor(channel, site pubkey)`), so nobody can take the wallet role before the phone scans. Pairings stored by older versions get a claim on their next reconnect. **Upgrade before 30 Nov 2026**: after that the relay refuses new channels without a site claim. See "Relay claims" in the README.
+
 ## 0.5.3 (unreleased)
 
 - **Phones get "Open bWalletX", not a QR.** On a touch device (`isTouchDevice()`), `pairingModal()` no longer shows a QR the user would have to scan with the same phone. It shows **Open bWalletX**, a link to the pairing universal link (`https://www.bwallet.space/pair?…`, the iOS universal link / Android app link the app already handles), plus **Use web.bwalletx.com instead** (copies the link and opens the web wallet to paste it), and the match code. The page keeps waiting on the pairing channel, so the user approves in the wallet and comes back. Desktops still get the QR. Force either with `pairingModal({ mode: 'qr' | 'app' })`.

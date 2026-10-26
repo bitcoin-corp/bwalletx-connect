@@ -81,10 +81,37 @@ export function parsePairUrl(text: string, nowS = Math.floor(Date.now() / 1000))
   return link;
 }
 
-export const relaySocketUrl = (relay: string, channel: string, role: Role, expiry?: number) => {
+/** A fresh relay role claim (16 random bytes): the relay then admits this role only with the same claim. */
+export const newClaim = () => b64url(crypto.getRandomValues(new Uint8Array(16)));
+
+const WALLET_CLAIM_INFO = 'bwallet-pair-wallet-claim-v1';
+const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+
+/**
+ * The wallet's relay claim for a fresh QR: SHA-256 of the channel and the site's pairing key, both read from the QR.
+ * The site sends its digest (`wc`) when it opens the channel; the relay sees only the channel ID, so a stranger who
+ * learns that can't take the wallet role before the phone scans (b-Aware 26 Oct 2026, N3-2).
+ */
+export async function walletClaimFor(channel: string, sitePub: string): Promise<string> {
+  const d = await crypto.subtle.digest('SHA-256', enc.encode(`${WALLET_CLAIM_INFO}|${channel}|${sitePub}`));
+  return b64url(new Uint8Array(d));
+}
+
+/** SHA-256 (hex) of a claim: what the relay stores and what a site sends as `wc`. */
+export async function claimDigest(claim: string): Promise<string> {
+  return hex(new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(claim))));
+}
+
+/**
+ * The relay socket URL. `claim` binds the role to this client (N3-1: a site always sends one, on every reconnect).
+ * A site opening a new channel also passes `walletClaimHash` so only the phone that scanned the QR gets the wallet role.
+ */
+export const relaySocketUrl = (relay: string, channel: string, role: Role, expiry?: number, claim?: string, walletClaimHash?: string) => {
   const local = /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(relay);
   const q = new URLSearchParams({ role });
   if (expiry) q.set('e', String(expiry));
+  if (claim) q.set('claim', claim);
+  if (walletClaimHash && role === 'site') q.set('wc', walletClaimHash);
   return `${local ? 'ws' : 'wss'}://${relay}/v1/c/${channel}?${q}`;
 };
 
