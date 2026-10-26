@@ -7,9 +7,12 @@ import {
   Sealer,
   deriveSession,
   isSealed,
+  claimDigest,
   newChannel,
+  newClaim,
   pairUrl,
   relaySocketUrl,
+  walletClaimFor,
   type HelloFrame,
   type PairMessage,
 } from './protocol.js';
@@ -73,6 +76,7 @@ interface StoredPairing {
   sent: number;
   lastSeen: number;
   pairedAt: number;
+  sc?: string; // our relay site claim, sent on every connect. Pairings stored before 0.5.4 get one on reconnect.
 }
 
 const DEFAULT_KEY = 'bwalletx.connect.pairing.v1';
@@ -110,6 +114,7 @@ function parseStored(raw: string | null): StoredPairing | null {
     if (typeof p.s !== 'string' || !/^[0-9a-f]{64}$/i.test(p.s)) return null;
     if (typeof p.k !== 'string' || !/^0[23][0-9a-f]{64}$/i.test(p.k)) return null;
     if (!n(p.sent) || !n(p.lastSeen) || !n(p.pairedAt)) return null;
+    if (p.sc !== undefined && (typeof p.sc !== 'string' || !/^[A-Za-z0-9_-]{22,64}$/.test(p.sc))) return null;
     return p as StoredPairing;
   } catch {
     return null;
@@ -168,8 +173,14 @@ class Link {
   }
 
   private reopen() {
+    // Pairings stored before site claims get one now; the relay binds it on this connect.
+    if (!this.p.sc) {
+      this.p = { ...this.p, sc: newClaim() };
+      this.persist();
+    }
     // A fresh expiry lets the relay recreate the channel if it was dropped; the wallet rejoins on its own.
-    const ws = this.socket(relaySocketUrl(this.p.r, this.p.c, 'site', Math.floor(Date.now() / 1000) + QR_LIFETIME_S - 10));
+    const e = Math.floor(Date.now() / 1000) + QR_LIFETIME_S - 10;
+    const ws = this.socket(relaySocketUrl(this.p.r, this.p.c, 'site', e, this.p.sc));
     return new Promise<void>((resolve, reject) => {
       ws.onopen = () => {
         this.ws = ws;
@@ -276,12 +287,15 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
   const siteKey = PrivateKey.fromRandom(); // a throwaway pairing key, not a wallet key
   const channel = newChannel();
   const expiry = Math.floor(Date.now() / 1000) + QR_LIFETIME_S;
+  // b-Aware 26 Oct 2026: our own role claim (N3-1), and the digest of the wallet claim only the QR can produce (N3-2).
+  const siteClaim = newClaim();
+  const sitePub = siteKey.toPublicKey().toString();
 
-  return new Promise<PairedWallet>((resolve, reject) => {
+  return walletClaimFor(channel, sitePub).then(claimDigest).then((wc) => new Promise<PairedWallet>((resolve, reject) => {
     if (opts.signal?.aborted) return reject(new Error('cancelled'));
     let ws: SocketLike;
     try {
-      ws = socket(relaySocketUrl(relay, channel, 'site', expiry));
+      ws = socket(relaySocketUrl(relay, channel, 'site', expiry, siteClaim, wc));
     } catch (e) {
       return reject(e);
     }
@@ -320,7 +334,7 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
       if (msg.t === 'ready') {
         settled = true;
         clearTimeout(timer);
-        const p: StoredPairing = { v: 1, c: channel, r: relay, s: siteKey.toHex(), k: walletKey, ...sealer.counters, pairedAt: Date.now() };
+        const p: StoredPairing = { v: 1, c: channel, r: relay, s: siteKey.toHex(), k: walletKey, ...sealer.counters, pairedAt: Date.now(), sc: siteClaim };
         await Promise.resolve(storage.setItem(key, JSON.stringify(p))).catch(() => {});
         const link = new Link(p, sealer, storage, key, socket, opts.callTimeoutMs ?? 120_000);
         link.adopt(ws);
@@ -329,8 +343,8 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
         fail(new Error('Pairing was declined in bWalletX'));
       }
     });
-    opts.onLink(pairUrl({ v: PAIR_VERSION, r: relay, c: channel, k: siteKey.toPublicKey().toString(), o: origin, e: expiry }));
-  });
+    opts.onLink(pairUrl({ v: PAIR_VERSION, r: relay, c: channel, k: sitePub, o: origin, e: expiry }));
+  }));
 }
 
 /**

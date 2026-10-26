@@ -1,7 +1,7 @@
 import { PrivateKey } from '@bsv/sdk';
 import { describe, expect, it } from 'vitest';
 import { pairBwalletX, restorePairing, type PairStorage } from '../src/pair';
-import { DEFAULT_RELAY, QR_LIFETIME_S, Sealer, deriveSession, isSealed, newChannel, pairUrl, relaySocketUrl, type HelloFrame } from '../src/protocol';
+import { DEFAULT_RELAY, QR_LIFETIME_S, Sealer, claimDigest, deriveSession, isSealed, newChannel, pairUrl, parsePairUrl, relaySocketUrl, walletClaimFor, type HelloFrame } from '../src/protocol';
 import { FakeRelay } from './fake-relay';
 import { fakePhone } from './phone';
 
@@ -87,5 +87,58 @@ describe('pairing survives a reload', () => {
     await again!.forget();
     expect(storage.m.size).toBe(0);
     expect(await restorePairing({ storage, socket: relay.socket })).toBeNull();
+  });
+});
+
+describe('relay role claims (b-Aware 26 Oct 2026, N3-1/N3-2)', () => {
+  it('the site opens the channel with its own claim and the digest of the QR-bound wallet claim, and reconnects with the same claim', async () => {
+    const relay = new FakeRelay(ORIGIN);
+    const root = PrivateKey.fromRandom();
+    const storage = mapStorage();
+    let qr = '';
+    const first = await pairBwalletX({
+      origin: ORIGIN,
+      storage,
+      socket: relay.socket,
+      onCode: () => {},
+      onLink: (link) => {
+        qr = link;
+        setTimeout(() => fakePhone(link, relay.socket, root), 0);
+      },
+    });
+    const opened = new URL(relay.urls.find((u) => u.includes('role=site'))!);
+    const claim = opened.searchParams.get('claim')!;
+    expect(claim).toMatch(/^[A-Za-z0-9_-]{22,64}$/);
+    const link = parsePairUrl(qr);
+    expect(opened.searchParams.get('wc')).toBe(await claimDigest(await walletClaimFor(link.c, link.k)));
+    expect(JSON.parse(storage.m.get('bwalletx.connect.pairing.v1')!).sc).toBe(claim);
+
+    await first.getPublicKey({ identityKey: true });
+    first.close();
+    const again = await restorePairing({ storage, socket: relay.socket });
+    await again!.getPublicKey({ identityKey: true });
+    const reopened = new URL(relay.urls.filter((u) => u.includes('role=site')).pop()!);
+    expect(reopened.searchParams.get('claim')).toBe(claim);
+    expect(reopened.searchParams.get('wc')).toBeNull(); // only a fresh QR channel carries the wallet binding
+  });
+
+  it('a pairing stored before claims gets one on reconnect and keeps it', async () => {
+    const relay = new FakeRelay(ORIGIN);
+    const storage = mapStorage();
+    await pairBwalletX({
+      origin: ORIGIN,
+      storage,
+      socket: relay.socket,
+      onCode: () => {},
+      onLink: (link) => setTimeout(() => fakePhone(link, relay.socket, PrivateKey.fromRandom()), 0),
+    }).then((w) => w.close());
+    const old = JSON.parse(storage.m.get('bwalletx.connect.pairing.v1')!);
+    delete old.sc;
+    storage.m.set('bwalletx.connect.pairing.v1', JSON.stringify(old));
+    const again = await restorePairing({ storage, socket: relay.socket });
+    await again!.getPublicKey({ identityKey: true });
+    const sc = JSON.parse(storage.m.get('bwalletx.connect.pairing.v1')!).sc;
+    expect(sc).toMatch(/^[A-Za-z0-9_-]{22,64}$/);
+    expect(new URL(relay.urls.at(-1)!).searchParams.get('claim')).toBe(sc);
   });
 });

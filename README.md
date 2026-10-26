@@ -326,6 +326,10 @@ The pairing is saved under `bwalletx.connect.pairing.v1` in `localStorage` by de
 
 The phone sends a plain `hello` and then, as soon as the user taps Connect, an encrypted `ready`. An async `onmessage` handler that is still deriving the key from `hello` when `ready` arrives drops `ready`, and pairing never finishes. This package handles frames one at a time in arrival order (`inOrder`). `test/pair.test.ts` reproduces the race.
 
+### Relay claims
+
+Since 0.5.4 the site side sends a role claim to the relay on every connect, and a digest of the QR-bound wallet claim when it opens a channel. Only the socket with your claim can take the site role, and only a phone that scanned your QR can take the wallet role. The relay (relay.bwallet.space) keeps a compatibility window for older sites and wallets until **30 Nov 2026**: until then a site without a claim can still open a channel and an older wallet can still join one. After that date the relay refuses both, so update `@bwalletx/connect` (or a copied `protocol.ts` + pairing code) before then. Sites that copied the pairing code must send `claim` on every site socket (keep it with the pairing) and `wc = claimDigest(await walletClaimFor(channel, sitePub))` when opening a new channel.
+
 ## One script tag
 
 ```html

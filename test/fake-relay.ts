@@ -3,9 +3,11 @@ import type { SocketLike } from '../src/pair';
 /** An in-memory stand-in for relay.bwallet.space: two roles per channel, frames passed through. */
 export class FakeRelay {
   channels = new Map<string, { site?: FakeSocket; wallet?: FakeSocket }>();
+  urls: string[] = [];
   constructor(public origin = 'https://example.com') {}
 
   socket = (url: string): SocketLike => {
+    this.urls.push(url);
     const u = new URL(url);
     const channel = u.pathname.split('/').pop()!;
     const role = u.searchParams.get('role') as 'site' | 'wallet';
