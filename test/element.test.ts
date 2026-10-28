@@ -37,6 +37,8 @@ describe('<bwalletx-signin> render', () => {
     expect(text(mount({ subtitle: 'off' }))).not.toContain('also works');
     expect(text(mount({ subtitle: 'no extension needed' }))).toContain('no extension needed');
     expect(signinText('connect', 'bWallet')).toBe('Connect bWallet');
+    expect(signinText('get')).toBe('Get bWalletX');
+    expect(signinText('play')).toBe('Play with bWalletX');
   });
 
   it('sm hides the subtitle; icon has no visible text but keeps an aria-label', () => {

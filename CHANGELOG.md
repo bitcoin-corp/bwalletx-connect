@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.5 (unreleased)
+
+- **`<bwalletx-signin label="get">` and `label="play"`**: "Get bWalletX" and "Play with bWalletX", the same official button for download and play-now calls to action (with `href` link mode). First users: terrornode.com and tokenblaster.lol.
+
 ## 0.5.4 (unreleased)
 
 - **Connect is fast.** A wallet that is present now resolves at once: the extension answers `brc100:requestWallet` synchronously, and `window.CWI` (in-app browser) is taken straight away instead of after the wait. The wait for "nothing here" before the pairing QR drops from 1200 ms to 300 ms (`DEFAULT_DISCOVER_MS`); in a bWalletX frame the XDM probe now starts in parallel. `discoverWallets` stops waiting 50 ms after a wallet has announced. Measured in Chrome: pairing modal 1.24–1.34 s → 0.33–0.34 s after the click.
