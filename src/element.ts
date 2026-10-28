@@ -8,7 +8,7 @@
  * Attributes (all optional):
  *   size          lg (default) | md | sm | icon
  *   theme         gold (default) | dark | light
- *   label         signin (default) | continue | connect
+ *   label         signin (default) | continue | connect | get ("Get bWalletX") | play ("Play with bWalletX")
  *   brand         bWalletX (default) | bWallet   (store edition text)
  *   subtitle      on | off | <custom text>. Default on for lg/md, off for sm/icon and for brand="bWallet"
  *   full-width    stretch to the container
@@ -41,10 +41,10 @@ export const WEB_WALLET_URL = 'https://web.bwalletx.com';
 
 export type SigninSize = 'lg' | 'md' | 'sm' | 'icon';
 export type SigninTheme = 'gold' | 'dark' | 'light';
-export type SigninLabel = 'signin' | 'continue' | 'connect';
+export type SigninLabel = 'signin' | 'continue' | 'connect' | 'get' | 'play';
 export type SigninBrand = 'bWalletX' | 'bWallet';
 
-const VERBS: Record<SigninLabel, string> = { signin: 'Sign in with', continue: 'Continue with', connect: 'Connect' };
+const VERBS: Record<SigninLabel, string> = { signin: 'Sign in with', continue: 'Continue with', connect: 'Connect', get: 'Get', play: 'Play with' };
 
 /** The visible label for a label/brand pair, e.g. "Sign in with bWalletX". */
 export function signinText(label: SigninLabel = 'signin', brand: SigninBrand = 'bWalletX'): string {
