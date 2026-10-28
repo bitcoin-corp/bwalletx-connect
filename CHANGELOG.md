@@ -2,6 +2,9 @@
 
 ## 0.5.4 (unreleased)
 
+- **Connect is fast.** A wallet that is present now resolves at once: the extension answers `brc100:requestWallet` synchronously, and `window.CWI` (in-app browser) is taken straight away instead of after the wait. The wait for "nothing here" before the pairing QR drops from 1200 ms to 300 ms (`DEFAULT_DISCOVER_MS`); in a bWalletX frame the XDM probe now starts in parallel. `discoverWallets` stops waiting 50 ms after a wallet has announced. Measured in Chrome: pairing modal 1.24–1.34 s → 0.33–0.34 s after the click.
+- **`onStatus`** on `signInWithBwalletX` / `connectBwalletX`: `'finding' | 'opening' | 'pairing' | 'signing'`, so the button can say "Opening your wallet…" the moment it is clicked.
+- **`prewarmBwalletX()` / `bindPrewarm(el)`**: on hover, focus or touch, send a prompt-free `isAuthenticated` so a sleeping extension worker starts reopening the wallet before the click (about 0.5 s off a cold Connect). `<bwalletx-signin>` binds it automatically.
 - **Security: relay role claims for the site (b-Aware 26 Oct 2026, N3-1/N3-2).** `pairBwalletX` now opens the relay channel with its own random site claim and stores it with the pairing (`sc`); every reconnect sends it, so someone who learns the channel ID can no longer replace your socket or lock you out. It also sends `wc`, the SHA-256 of the wallet claim only the QR can produce (`walletClaimFor(channel, site pubkey)`), so nobody can take the wallet role before the phone scans. Pairings stored by older versions get a claim on their next reconnect. **Upgrade before 30 Nov 2026**: after that the relay refuses new channels without a site claim. See "Relay claims" in the README.
 
 ## 0.5.3 (unreleased)
