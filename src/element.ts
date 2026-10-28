@@ -19,7 +19,7 @@
  *                                bwalletx-access-granted or bwalletx-access-denied { code, have, need }
  *   get-url       where "Get bWalletX" points. Default https://bwalletx.com/get
  *   web-url       the web wallet. Default https://web.bwalletx.com
- *   discover-ms   how long to wait for the wallet to answer. Default 1200
+ *   discover-ms   how long to wait for a wallet that has not answered. Default 300
  *   href          plain link mode: navigate here on click
  *   authorize-url (+ client-id, redirect-uri, scope)  OAuth mode, for auth.bwalletx.com once it exists
  *
@@ -30,7 +30,7 @@
  *   bwalletx-not-found  no bWalletX answered; the "Get bWalletX" row is shown
  *   bwalletx-error      detail { error }
  */
-import { discoverBwalletX } from './discover.js';
+import { bindPrewarm, discoverBwalletX, DEFAULT_DISCOVER_MS } from './discover.js';
 import { signInWithBwalletX, type Challenge } from './signin.js';
 import { requestAccess, type AccessChallengeLike } from './access-client.js';
 import { AccessError } from './access.js';
@@ -202,6 +202,7 @@ function createClass(): CustomElementConstructor {
         : '';
       this.#root.innerHTML = `<style>${SIGNIN_CSS}</style><button type="button" part="button" aria-label="${esc(aria)}" title="${esc(subtitle ? `${text} (${subtitle})` : text)}"${disabled ? ' disabled' : ''}${loading ? ' aria-busy="true"' : ''}><span class="mark" part="mark">${mark}</span>${label}</button>${loading ? '<span class="sr" role="status">Connecting to bWalletX…</span>' : ''}${nf}`;
       this.button!.addEventListener('click', () => void this.#click());
+      bindPrewarm(this.button!);
     }
 
     #emit(type: string, detail?: unknown, cancelable = false) {
@@ -228,7 +229,7 @@ function createClass(): CustomElementConstructor {
       this.#notFound = false;
       this.#setBusy(true);
       try {
-        const ms = Number(this.#attr('discover-ms')) || 1200;
+        const ms = Number(this.#attr('discover-ms')) || DEFAULT_DISCOVER_MS;
         const found = await discoverBwalletX(ms);
         if (!found) {
           this.#notFound = true;

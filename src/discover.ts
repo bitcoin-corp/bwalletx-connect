@@ -15,17 +15,27 @@ export interface FoundWallet {
 }
 
 /**
- * Like findBwalletX, but also says which bWalletX answered.
- * Order: a BRC-100 announcement with a bWalletX rdns; then `window.CWI` (set by the in-app
- * browser, and by older builds that do not announce); otherwise null.
+ * Default wait for a wallet that has not answered yet, ms. bWalletX for Chrome answers `brc100:requestWallet`
+ * synchronously and the in-app browser sets `window.CWI` before the page runs, so a found wallet resolves at once;
+ * this is only how long "nothing here" takes before the pairing QR shows. Was 1200 (0.5.3 and earlier).
  */
-export function discoverBwalletX(ms = 1200): Promise<FoundWallet | null> {
+export const DEFAULT_DISCOVER_MS = 300;
+
+/**
+ * Like findBwalletX, but also says which bWalletX answered.
+ * Order: a BRC-100 announcement with a bWalletX rdns (answered at once by the extension); then `window.CWI` (set by
+ * the in-app browser, and by older builds that do not announce), taken straight away; then, only when framed, the
+ * parent's XDM answer (probed in parallel with the wait). Otherwise null after `ms`.
+ */
+export function discoverBwalletX(ms = DEFAULT_DISCOVER_MS): Promise<FoundWallet | null> {
   if (typeof window === 'undefined') return Promise.resolve(null);
   return new Promise((resolve) => {
     let done = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = (r: FoundWallet | null) => {
       if (done) return;
       done = true;
+      if (timer !== undefined) clearTimeout(timer);
       window.removeEventListener('brc100:announceWallet', onAnnounce);
       resolve(r);
     };
@@ -36,15 +46,24 @@ export function discoverBwalletX(ms = 1200): Promise<FoundWallet | null> {
         finish({ wallet: d.wallet, method: rdns === RDNS_EXTENSION ? 'extension' : 'in-app', rdns });
       }
     };
+    const cwiNow = (): boolean => {
+      const cwi = (window as unknown as { CWI?: WalletInterface }).CWI;
+      if (cwi) finish({ wallet: cwi, method: 'in-app', rdns: null });
+      return !!cwi;
+    };
     window.addEventListener('brc100:announceWallet', onAnnounce);
     window.dispatchEvent(new Event('brc100:requestWallet'));
-    setTimeout(() => {
-      const cwi = (window as unknown as { CWI?: WalletInterface }).CWI;
-      if (cwi) return finish({ wallet: cwi, method: 'in-app', rdns: null });
-      // Inside bWalletX's in-wallet frame nothing is injected into the page: the wallet answers BRC-100 XDM
-      // (postMessage to the parent) instead. Only tried when framed, and only kept if the parent answers.
-      if (!isFramed()) return finish(null);
-      void probeXdm(ms).then((w) => finish(w ? { wallet: w, method: 'in-app', rdns: null } : null));
+    if (done || cwiNow()) return;
+    // Inside bWalletX's in-wallet frame nothing is injected into the page: the wallet answers BRC-100 XDM
+    // (postMessage to the parent) instead. Only tried when framed, and only kept if the parent answers.
+    // The parent may take a moment to answer, so it gets at least the old 1200 ms; unframed pages never wait on it.
+    if (isFramed()) {
+      void probeXdm(Math.max(ms, 1200)).then((w) => finish(w ? { wallet: w, method: 'in-app', rdns: null } : null));
+      return;
+    }
+    timer = setTimeout(() => {
+      timer = undefined;
+      if (!cwiNow()) finish(null);
     }, ms);
   });
 }
@@ -53,7 +72,7 @@ export function discoverBwalletX(ms = 1200): Promise<FoundWallet | null> {
  * Find bWalletX in this page: the extension on a computer, or the wallet itself when the page is
  * open in bWalletX's in-app browser. Resolves null if nothing answered within `ms`.
  */
-export async function findBwalletX(ms = 1200): Promise<WalletInterface | null> {
+export async function findBwalletX(ms = DEFAULT_DISCOVER_MS): Promise<WalletInterface | null> {
   return (await discoverBwalletX(ms))?.wallet ?? null;
 }
 
@@ -118,4 +137,28 @@ export async function probeXdm(ms = 1200, allowed: readonly string[] = BWALLETX_
   } catch {
     return null;
   }
+}
+
+let warmedAt = 0;
+
+/**
+ * Wake the wallet before the click (call on pointerenter / focus / touchstart of your Connect button). Chrome stops an
+ * idle extension worker after ~30 s, and a cold worker needs 1-3 s to reopen the wallet; this sends a liveness call
+ * (isAuthenticated: never shows a prompt, never reveals a key) so that work starts while the pointer is on its way.
+ * At most once every 20 s. Does nothing when no bWalletX is in the page.
+ */
+export function prewarmBwalletX(): void {
+  if (typeof window === 'undefined' || Date.now() - warmedAt < 20_000) return;
+  warmedAt = Date.now();
+  void discoverBwalletX(0).then((f) => {
+    if (f && f.method === 'extension') void f.wallet.isAuthenticated({}).catch(() => {});
+  });
+}
+
+/** Prewarm on hover, keyboard focus and touch. Returns a function that removes the listeners. */
+export function bindPrewarm(el: EventTarget): () => void {
+  const on = () => prewarmBwalletX();
+  const evs = ['pointerenter', 'focus', 'touchstart'];
+  for (const e of evs) el.addEventListener(e, on, { passive: true });
+  return () => evs.forEach((e) => el.removeEventListener(e, on));
 }

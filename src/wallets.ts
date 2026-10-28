@@ -113,7 +113,7 @@ export function handcashAdapter(o: HandCashAdapterOptions): WalletOption {
 }
 
 export interface DiscoverWalletsOptions {
-  /** How long to collect BRC-100 announcements, ms. Default 1200. */
+  /** Longest wait for BRC-100 announcements, ms. Default 300; ends early once a wallet has announced. */
   ms?: number;
   /**
    * Also probe desktop wallets on localhost (Metanet / json-api on 3321, Cicada on 3301).
@@ -141,7 +141,7 @@ async function probe(substrate: 'json-api' | 'Cicada', ms: number): Promise<Wall
 /** All wallets we can see, bWalletX first. SSR-safe: resolves [] (plus `extra`) outside a browser. */
 export async function discoverWallets(o: DiscoverWalletsOptions = {}): Promise<WalletOption[]> {
   const out: WalletOption[] = [];
-  const ms = o.ms ?? 1200;
+  const ms = o.ms ?? 300;
   if (typeof window !== 'undefined') {
     const seen = new Map<string, WalletOption>();
     const onAnnounce = (e: Event) => {
@@ -155,7 +155,8 @@ export async function discoverWallets(o: DiscoverWalletsOptions = {}): Promise<W
     window.addEventListener('brc100:announceWallet', onAnnounce);
     window.dispatchEvent(new Event('brc100:requestWallet'));
     const local = o.probeLocal ? Promise.all([probe('json-api', ms), probe('Cicada', ms)]) : Promise.resolve([null, null]);
-    await new Promise((r) => setTimeout(r, ms));
+    // Wallets answer requestWallet synchronously; once one has, a short grace catches any slower sibling.
+    await new Promise((r) => setTimeout(r, seen.size > 0 || (window as unknown as { CWI?: unknown }).CWI ? Math.min(ms, 50) : ms));
     window.removeEventListener('brc100:announceWallet', onAnnounce);
     out.push(...seen.values());
     const cwi = (window as unknown as { CWI?: WalletInterface }).CWI;
