@@ -9,6 +9,8 @@ export type { ButtonOptions } from './button.js';
 export { inOrder } from './in-order.js';
 export { defineBwalletxSignin, buildAuthorizeUrl, signinText, markSvg, SIGNIN_TAG, SIGNIN_CSS, GET_URL, WEB_WALLET_URL } from './element.js';
 export type { SigninSize, SigninTheme, SigninLabel, SigninBrand, AuthorizeParams } from './element.js';
+export { defineBwalletxButton, getUrlFor, stateFor, handleLabel, BUTTON_TAG, CONNECTED_KEY } from './wallet-button.js';
+export type { ButtonState } from './wallet-button.js';
 export { pay, tip, buyToken, amountInSats, resolvePaymailP2P, PaymentError, BRC29_PROTOCOL, isPaymail, isIdentityKeyHex } from './pay.js';
 export type { PayRequest, PayResult, PayOptions, PayOutput, PaySource, LegacyPayer, Brc29Remittance, BuyTokenRequest, TokenQuote, PaymentErrorCode } from './pay.js';
 export { discoverWallets, brc100Option, pairingOption, handcashAdapter } from './wallets.js';

@@ -2,6 +2,7 @@
 
 ## 0.5.5 (unreleased)
 
+- **`<bwalletx-button>`: the one nav wallet control.** It renders Get bWalletX (deep-linked by platform), Connect bWalletX, or the $handle chip, by state, with the official button look. It guards against duplicates: a second instance and legacy controls in the same header/nav are hidden, with a console warning. Use only this element; don't add your own Get or Connect links.
 - **`<bwalletx-signin label="get">` and `label="play"`**: "Get bWalletX" and "Play with bWalletX", the same official button for download and play-now calls to action (with `href` link mode). First users: terrornode.com and tokenblaster.lol.
 
 ## 0.5.4 (unreleased)
