@@ -156,6 +156,25 @@ Every expected output has to be matched by a different output that carries at le
 3. Replace HandCash payment calls with `pay` / `tip` / `buyToken`, and check them on the server with `verifyPayment` instead of HandCash payment webhooks.
 4. Remove the adapter when your users have moved over.
 
+## The nav wallet control: use only `<bwalletx-button>`
+
+**Use only this element for your site's wallet control. Don't add your own "Get bWalletX" or "Connect" links or buttons next to it.** It renders exactly one thing by state:
+
+| State | Shows |
+|---|---|
+| No wallet in this browser | **Get bWalletX** (a link: bwalletx.com/extension on desktop Chrome, /iphone, /android, else /get) |
+| A wallet here, not connected | **Connect bWalletX** (extension, in-app browser, or a QR to the phone app) |
+| Connected | The **$handle chip** (click to disconnect) |
+
+```html
+<script src="https://cdn.jsdelivr.net/npm/@bwalletx/connect/dist/bwalletx-connect.global.js"></script>
+<header>… <bwalletx-button></bwalletx-button></header>
+```
+
+Or `import '@bwalletx/connect/element'`. Attributes: `size` (sm, md, lg), `get-url`, `discover-ms`, `lookup-url`. Events: `bwalletx-connected` `{ identityKey }` and `bwalletx-disconnected`.
+
+**Guard:** there is one per page. A second `<bwalletx-button>` hides itself. Legacy controls inside the same `<header>`/`<nav>` (`[data-bwx-connect]`, `.nav-connect`, `.nav-acct`, links to bwalletx.com/get) are hidden too. Each one hidden logs a console warning. Links in your page content are left alone.
+
 ## The button
 
 `<bwalletx-signin>` is the standard "Sign in with bWalletX" button: a web component with no dependencies (Shadow DOM), plus a React wrapper. It is the gold button from bit-sign's sign-in card.
