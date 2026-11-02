@@ -5,6 +5,7 @@ export const LOGIN_PROTOCOL: WalletProtocol = [2, 'bwallet sign in'];
 export const CHALLENGE_LIFETIME_MS = 2 * 60 * 1000;
 
 export interface PendingChallenge {
+  /** The key the challenge was made for, or '' when none was given (verifySignIn then binds the claimed key). */
   identityKey: string;
   origin: string;
   message: string;
@@ -96,8 +97,12 @@ function randomNonce(): string {
 export interface CreateChallengeOptions {
   /** YOUR site's origin from config, e.g. "https://example.com". Never take it from the request. */
   origin: string;
-  /** The identity key the browser claims. Checked again at verify. */
-  identityKey: unknown;
+  /**
+   * The identity key the browser claims, checked again at verify. Optional since 0.5.5: leave it out so the browser
+   * can ask the wallet for the key and the signature in ONE sheet; verifySignIn then binds the key the browser claims,
+   * and the signature only verifies for that key. A challenge made WITH a key still only verifies for that key.
+   */
+  identityKey?: unknown;
   /** Default: a process-wide in-memory store (dev only). */
   store?: NonceStore;
 }
@@ -110,14 +115,16 @@ export interface ChallengeResponse {
   expiresAt: number;
 }
 
-/** Step 1. Throws if identityKey is not a valid compressed public key. Send the result to the browser. */
+/** Step 1. Throws if an identityKey is given and is not a valid compressed public key. Send the result to the browser. */
 export async function createChallenge(opts: CreateChallengeOptions): Promise<ChallengeResponse> {
-  if (!isIdentityKey(opts.identityKey)) throw new Error('identityKey must be a compressed public key (66 hex chars)');
+  const given = opts.identityKey !== undefined && opts.identityKey !== null && opts.identityKey !== '';
+  if (given && !isIdentityKey(opts.identityKey)) throw new Error('identityKey must be a compressed public key (66 hex chars)');
+  const boundKey = given ? (opts.identityKey as string).toLowerCase() : '';
   const origin = normalOrigin(opts.origin);
   const nonce = randomNonce();
   const expiresAt = Date.now() + CHALLENGE_LIFETIME_MS;
   const message = loginMessage(origin, nonce, expiresAt);
-  await storeOrDefault(opts.store).put(nonce, { identityKey: opts.identityKey.toLowerCase(), origin, message, expiresAt });
+  await storeOrDefault(opts.store).put(nonce, { identityKey: boundKey, origin, message, expiresAt });
   return { nonce, message, protocolID: LOGIN_PROTOCOL, keyID: nonce, expiresAt };
 }
 
@@ -148,7 +155,9 @@ export async function verifySignIn(opts: VerifySignInOptions): Promise<string | 
   if (c.origin !== origin) return null;
   if (!isIdentityKey(opts.identityKey)) return null;
   const identityKey = opts.identityKey.toLowerCase();
-  if (c.identityKey !== identityKey) return null;
+  // A challenge made for a key only verifies for that key. One made without a key binds the key claimed now: the
+  // signature below is checked against exactly this key, so a wrong claim fails.
+  if (c.identityKey && c.identityKey !== identityKey) return null;
 
   const sig = opts.signature;
   if (!Array.isArray(sig) || sig.length < 8 || sig.length > 80 || !sig.every((b) => Number.isInteger(b) && b >= 0 && b <= 255)) {

@@ -95,7 +95,22 @@ function Account() {
 
 `useBwalletX()` gives `status` (`idle | restoring | connecting | connected | error`), `identityKey`, `handle`, `paymail`, `wallet` (the BRC-100 `WalletInterface`), `walletId`, `signedIn`, `error`, `wallets`, `connect({ walletId? })`, `disconnect()`, `listWallets()`, `pay`, `tip` and `buyToken`.
 
-`connect()` finds wallets, shows the built-in picker when there is more than one (bWalletX first), shows the pairing QR modal for phones, and signs in through your routes when `challengeUrl` and `verifyUrl` are set. Nothing touches `window` during render, so the provider is safe in server-rendered pages. After a reload the session comes back from `sessionUrl`, but `wallet` stays `null` until the user calls `connect()` again.
+`connect()` finds wallets and signs in through your routes when `challengeUrl` and `verifyUrl` are set, with **one wallet sheet**: the challenge comes first (no key), then the identity key and the signature are asked for together, and a repeat sign-in on the same site is the signature alone. With one wallet in the browser there is no picker; the picker shows only for a real choice (two wallets, or an app option such as HandCash), lists bWalletX once, and offers the pairing QR for phones. Nothing touches `window` during render, so the provider is safe in server-rendered pages. After a reload the session comes back from `sessionUrl`, but `wallet` stays `null` until the user calls `connect()` again.
+
+### Drop-in: provider + one element + 3 routes
+
+The official element follows the provider, so one element gives the whole experience: **Sign in with bWalletX** → **Approve in bWalletX…** (with one line: "Sign in: shares only your public identity key, moves no money") → a signed-in badge (bAvatar, $handle or a short key, gold dot) whose menu has **Copy paymail/key** and **Disconnect**. A reload restores the badge from `sessionUrl` with no wallet prompt. A no in the wallet reads "Sign-in cancelled" with **Retry**.
+
+```tsx
+<BwalletXProvider challengeUrl="/api/bwalletx/challenge" verifyUrl="/api/bwalletx/verify"
+  logoutUrl="/api/bwalletx/logout" sessionUrl="/api/bwalletx/session">
+  <BwalletxSignin size="sm" />   {/* in your header; that's all */}
+</BwalletXProvider>
+```
+
+Your own UI instead: `const { status, identityKey, paymail, handle, label, avatarUrl, error, login, logout } = useBwalletXAccount();` (`status`: `restoring | signed-out | pending | signed-in | error`).
+
+**Upgrade the server too.** The one-sheet order needs a challenge route that accepts no key: `createChallenge` / `createBwalletXAuth` from 0.5.5. Against an older server the browser sees the refusal and falls back to the old order (two sheets) by itself; `challengeNeedsIdentityKey` skips the attempt.
 
 ## Payments
 
@@ -203,12 +218,18 @@ import { BwalletxSignin } from '@bwalletx/connect/react';
 | `brand` | `bWalletX` (default), `bWallet` (store edition) |
 | `subtitle` | `on`, `off`, or your own text. Default "also works with bWallet" on lg/md |
 | `full-width`, `loading`, `disabled` | flags |
-| `challenge-url`, `verify-url` | run the sign-in flow on click: POST `{ identityKey }`, then POST `{ identityKey, nonce, signature }` |
+| `challenge-url`, `verify-url` | run the sign-in flow on click: POST `{}` (one sheet; `{ identityKey }` on a repeat sign-in), then POST `{ identityKey, nonce, signature }` |
+| `session-url`, `logout-url` | restore the signed-in badge on load (no wallet prompt); POST on Disconnect |
+| `lookup-url` | paymail lookup for the badge (default pay.bwallet.space; `off`) |
+| `stateless` | the pre-0.5.5 plain button: no badge, no pending/error states |
+| `state` (+ `identity-key`, `paymail`, `handle`, `avatar-url`, `error`) | drive the states yourself; `<BwalletxSignin>` inside `<BwalletXProvider>` does this for you |
 | `get-url`, `web-url` | where "Get bWalletX" and the web wallet link go (bwalletx.com/get, web.bwalletx.com) |
 | `href` | navigate on click instead |
 | `authorize-url`, `client-id`, `redirect-uri`, `scope` | OAuth 2.1 redirect with S256 PKCE (verifier, state and nonce in `sessionStorage["bwalletx:oauth"]`). For auth.bwalletx.com, which is planned and not live yet |
 
-Events (bubbling, composed): `bwalletx-signin` on every click (call `preventDefault()` to run your own flow instead), `bwalletx-signed-in` with `{ identityKey, method, nonce, signature, response }`, `bwalletx-not-found` (the button then shows "Get bWalletX" and a web wallet link), `bwalletx-error` with `{ error }`.
+Events (bubbling, composed): `bwalletx-signin` on every click (call `preventDefault()` to run your own flow instead), `bwalletx-signed-in` with `{ identityKey, method, nonce, signature, response }`, `bwalletx-not-found` (the button then shows "Get bWalletX" and a web wallet link), `bwalletx-error` with `{ error }`, `bwalletx-disconnect` (cancelable; Disconnect in the badge menu) and `bwalletx-signed-out`.
+
+States: signed out → pending ("Approve in bWalletX…" plus one plain line) → signed in (the badge; its menu is a body-level portal, so an `overflow:hidden` header never clips it, and it is keyboard operable: Enter/↓ opens, arrows move, Esc closes) or error (one line plus Retry).
 
 Without `challenge-url`, `href` or `authorize-url` the button only fires `bwalletx-signin`. The built-in flow uses the extension or in-app browser only. For phone pairing, listen for `bwalletx-signin`, call `preventDefault()`, and call `signInWithBwalletX` with `pairing` as shown above.
 
@@ -222,7 +243,7 @@ import { createChallenge, verifySignIn, originAllowed, memoryStore } from '@bwal
 const ORIGIN = 'https://example.com'; // your site, from config. Never from the request.
 const store = memoryStore();          // dev only. See "Nonce store" below.
 
-// POST /auth/bwalletx/challenge   body: { identityKey }
+// POST /auth/bwalletx/challenge   body: {} (or { identityKey })
 app.post('/auth/bwalletx/challenge', async (req, res) => {
   if (!originAllowed(req.get('origin'), ORIGIN)) return res.status(403).end();
   try {
@@ -242,7 +263,7 @@ app.post('/auth/bwalletx/verify', async (req, res) => {
 });
 ```
 
-`verifySignIn` returns the identity key (66 lowercase hex characters) or `null`. It refuses a nonce that was already used, has expired (2 minutes), was issued for another origin or another identity key, or whose signature doesn't verify.
+`verifySignIn` returns the identity key (66 lowercase hex characters) or `null`. It refuses a nonce that was already used, has expired (2 minutes), was issued for another origin or another identity key, or whose signature doesn't verify. Since 0.5.5 `identityKey` is optional in `createChallenge`: a challenge made without one binds the key the browser claims at verify, and the signature only verifies for that key. That lets the browser ask the wallet for the key and the signature in one sheet.
 
 The text the wallet signs:
 

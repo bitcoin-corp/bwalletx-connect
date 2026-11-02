@@ -4,9 +4,10 @@
  * desktop wallets, phone pairing, and app-supplied adapters (e.g. the transitional HandCash one).
  */
 import { WalletClient, type WalletInterface } from '@bsv/sdk';
-import { BWALLETX_RDNS, RDNS_EXTENSION } from './discover.js';
+import { BWALLETX_RDNS, RDNS_EXTENSION, RDNS_MOBILE } from './discover.js';
 import { pairBwalletX, restorePairing, type PairingOptions } from './pair.js';
 import type { PaySource } from './pay.js';
+import { waitIfLocked } from './signin.js';
 
 export type WalletKind = 'brc100' | 'pairing' | 'handcash' | 'custom';
 
@@ -34,11 +35,24 @@ export interface WalletOption {
   rdns?: string;
   /** True for bWalletX (extension, in-app or paired). */
   isBwalletX: boolean;
-  connect(): Promise<ConnectedWallet>;
+  /** The BRC-100 wallet behind a detected option (brc100 kind), when known before connecting. */
+  wallet?: WalletInterface;
+  /**
+   * Open the wallet. By default it also asks for the identity key (one wallet call). Pass `{ identity: false }` when
+   * you sign in straight after (BwalletXProvider does): the key then comes with the sign-in signature, in ONE sheet,
+   * and `identityKey` is null here.
+   */
+  connect(opts?: ConnectOptions): Promise<ConnectedWallet>;
 }
 
-async function brc100Connected(wallet: WalletInterface, o: Pick<WalletOption, 'id' | 'kind'>): Promise<ConnectedWallet> {
-  await wallet.waitForAuthentication({}).catch(() => {});
+export interface ConnectOptions {
+  /** Ask for the identity key now. Default true. */
+  identity?: boolean;
+}
+
+async function brc100Connected(wallet: WalletInterface, o: Pick<WalletOption, 'id' | 'kind'>, c: ConnectOptions = {}): Promise<ConnectedWallet> {
+  if (c.identity === false) return { wallet, payer: wallet, identityKey: null, optionId: o.id, kind: o.kind };
+  await waitIfLocked(wallet);
   const { publicKey } = await wallet.getPublicKey({ identityKey: true });
   return { wallet, payer: wallet, identityKey: publicKey, optionId: o.id, kind: o.kind };
 }
@@ -52,7 +66,8 @@ export function brc100Option(wallet: WalletInterface, info: { id: string; name: 
     rdns: info.rdns,
     kind: 'brc100',
     isBwalletX: info.isBwalletX ?? false,
-    connect: () => brc100Connected(wallet, opt),
+    wallet,
+    connect: (c) => brc100Connected(wallet, opt, c),
   };
   return opt;
 }
@@ -64,10 +79,10 @@ export function pairingOption(pairing: PairingOptions | (() => PairingOptions)):
     name: 'bWalletX on your phone',
     kind: 'pairing',
     isBwalletX: true,
-    async connect() {
+    async connect(c) {
       const p = typeof pairing === 'function' ? pairing() : pairing;
       const w = (await restorePairing(p)) ?? (await pairBwalletX(p));
-      return brc100Connected(w, opt);
+      return brc100Connected(w, opt, c);
     },
   };
   return opt;
@@ -138,6 +153,14 @@ async function probe(substrate: 'json-api' | 'Cicada', ms: number): Promise<Wall
   }
 }
 
+/**
+ * True when window.CWI is a wallet that already announced itself, so the picker must not list it twice. bWalletX
+ * (extension and in-app) sets window.CWI to the very object it announces; the in-app browser is matched by rdns too.
+ */
+export function cwiIsAnnounced(cwi: WalletInterface, announced: WalletOption[]): boolean {
+  return announced.some((o) => o.wallet === cwi || o.rdns === RDNS_MOBILE);
+}
+
 /** All wallets we can see, bWalletX first. SSR-safe: resolves [] (plus `extra`) outside a browser. */
 export async function discoverWallets(o: DiscoverWalletsOptions = {}): Promise<WalletOption[]> {
   const out: WalletOption[] = [];
@@ -160,8 +183,8 @@ export async function discoverWallets(o: DiscoverWalletsOptions = {}): Promise<W
     window.removeEventListener('brc100:announceWallet', onAnnounce);
     out.push(...seen.values());
     const cwi = (window as unknown as { CWI?: WalletInterface }).CWI;
-    if (cwi && ![...seen.values()].some((x) => x.rdns === 'space.bwallet.mobile')) {
-      out.push(brc100Option(cwi, { id: 'window.CWI', name: 'This app’s wallet', isBwalletX: false }));
+    if (cwi && !cwiIsAnnounced(cwi, [...seen.values()])) {
+      out.push(brc100Option(cwi, { id: 'window.CWI', name: seen.size ? 'Another browser wallet' : 'Browser wallet', isBwalletX: false }));
     }
     const [json, cicada] = await local;
     if (json) out.push(brc100Option(json, { id: 'localhost:3321', name: 'Desktop wallet (localhost:3321)' }));
@@ -172,4 +195,24 @@ export async function discoverWallets(o: DiscoverWalletsOptions = {}): Promise<W
   // bWalletX first, transitional last; otherwise keep discovery order.
   const rank = (w: WalletOption) => (w.isBwalletX ? 0 : w.kind === 'handcash' ? 2 : 1);
   return out.map((w, i) => ({ w, i })).sort((a, b) => rank(a.w) - rank(b.w) || a.i - b.i).map((x) => x.w);
+}
+
+/**
+ * Which option to use without showing the picker, or undefined when the user has a real choice.
+ *   - nothing found → null;
+ *   - one option → it;
+ *   - exactly one wallet detected in this browser and no app-supplied option (HandCash, custom) → that wallet, with no
+ *     picker: phone pairing is a fallback for "no wallet here", not a second choice;
+ *   - only phone pairing → pairing.
+ * `force` (picker off): the first detected wallet, else the first non-pairing option, else pairing.
+ */
+export function autoChoice(list: WalletOption[], force = false): WalletOption | null | undefined {
+  const detected = list.filter((w) => w.kind === 'brc100');
+  const others = list.filter((w) => w.kind === 'handcash' || w.kind === 'custom');
+  if (force) return detected[0] ?? list.find((w) => w.kind !== 'pairing') ?? list[0] ?? null;
+  if (!list.length) return null;
+  if (list.length === 1) return list[0]!;
+  if (detected.length === 1 && others.length === 0) return detected[0]!;
+  if (detected.length === 0 && others.length === 0) return list[0]!;
+  return undefined;
 }

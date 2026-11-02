@@ -123,7 +123,7 @@ describe('<bwalletx-signin> events', () => {
       const body = url === '/c' ? { nonce: 'n1', message: 'hello', keyID: 'n1' } : { ok: true };
       return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
     }));
-    const el = mount({ 'challenge-url': '/c', 'verify-url': '/v', 'discover-ms': '50' });
+    const el = mount({ 'challenge-url': '/c', 'verify-url': '/v', 'discover-ms': '50', 'lookup-url': 'off' });
     const done = new Promise<CustomEvent>((r) => el.addEventListener('bwalletx-signed-in', (e) => r(e as CustomEvent)));
     el.button.click();
     const e = await done;

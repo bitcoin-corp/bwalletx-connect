@@ -22,12 +22,13 @@ import {
 import type { WalletInterface } from '@bsv/sdk';
 import { clearPairing } from './pair.js';
 import { declareWalletTheme } from './theme.js';
-import { atStage, signInWithBwalletX, type Challenge } from './signin.js';
+import { runConnect } from './connect-flow.js';
 import { pairingModal } from './modal.js';
 import { pickWallet } from './modal.js';
 import { discoverWallets, type ConnectedWallet, type WalletOption } from './wallets.js';
+import { accountLabel, avatarUrlFor, lookupPaymail, signInErrorText } from './account.js';
 import { PaymentError, buyToken, pay, tip, type BuyTokenRequest, type PayOptions, type PayRequest, type PayResult } from './pay.js';
-import { defineBwalletxSignin, type SigninBrand, type SigninLabel, type SigninSize, type SigninTheme } from './element.js';
+import { defineBwalletxSignin, type SigninBrand, type SigninLabel, type SigninSize, type SigninState, type SigninTheme } from './element.js';
 
 export interface SignedInDetail {
   identityKey: string;
@@ -57,6 +58,18 @@ export interface BwalletxSigninProps {
   redirectUri?: string;
   scope?: string;
   discoverMs?: number;
+  /** Without a provider: GET → { identityKey, handle?, paymail? } restores the signed-in badge on load. */
+  sessionUrl?: string;
+  /** Without a provider: POST on Disconnect. */
+  logoutUrl?: string;
+  /** Paymail lookup for the badge; 'off' to skip. */
+  lookupUrl?: string;
+  /**
+   * Show the signed-in badge and the pending / error states (default true). Inside <BwalletXProvider> the button
+   * follows the provider: click → connect() (one wallet sheet), badge when signed in, Disconnect → disconnect()
+   * (logoutUrl). Set false for the pre-0.5.5 plain button.
+   */
+  stateful?: boolean;
   'aria-label'?: string;
   className?: string;
   style?: CSSProperties;
@@ -66,22 +79,59 @@ export interface BwalletxSigninProps {
   onSignedIn?: (d: SignedInDetail) => void;
   onNotFound?: () => void;
   onError?: (error: unknown) => void;
+  /** After Disconnect in the badge menu. */
+  onSignedOut?: () => void;
+}
+
+/** The element state for the provider's state. */
+export function signinStateFor(v: Pick<BwalletXState, 'status' | 'identityKey'>): SigninState {
+  if (v.status === 'restoring') return 'restoring';
+  if (v.status === 'connecting') return 'pending';
+  if (v.status === 'error') return 'error';
+  if (v.status === 'connected' && v.identityKey) return 'signed-in';
+  return 'signed-out';
 }
 
 export function BwalletxSignin(props: BwalletxSigninProps): ReactElement {
   const ref = useRef<HTMLElement>(null);
   const cb = useRef(props);
   cb.current = props;
+  const ctx = useContext(Ctx);
+  const ctxRef = useRef(ctx);
+  ctxRef.current = ctx;
+  const driven = !!ctx && props.stateful !== false;
 
   useEffect(() => {
     defineBwalletxSignin();
     const el = ref.current;
     if (!el) return;
     const on: [string, EventListener][] = [
-      ['bwalletx-signin', (e) => cb.current.onClick?.(e as CustomEvent<{ element: HTMLElement }>)],
+      [
+        'bwalletx-signin',
+        (e) => {
+          cb.current.onClick?.(e as CustomEvent<{ element: HTMLElement }>);
+          // Inside a provider the click is the provider's connect(): one wallet sheet, and this button follows it.
+          const c = ctxRef.current;
+          if (!e.defaultPrevented && c && cb.current.stateful !== false) {
+            e.preventDefault();
+            c.connect().catch(() => undefined);
+          }
+        },
+      ],
       ['bwalletx-signed-in', (e) => cb.current.onSignedIn?.((e as CustomEvent<SignedInDetail>).detail)],
       ['bwalletx-not-found', () => cb.current.onNotFound?.()],
       ['bwalletx-error', (e) => cb.current.onError?.((e as CustomEvent<{ error: unknown }>).detail.error)],
+      [
+        'bwalletx-disconnect',
+        (e) => {
+          const c = ctxRef.current;
+          if (c && cb.current.stateful !== false) {
+            e.preventDefault();
+            void c.disconnect().then(() => cb.current.onSignedOut?.());
+          }
+        },
+      ],
+      ['bwalletx-signed-out', () => cb.current.onSignedOut?.()],
     ];
     for (const [t, f] of on) el.addEventListener(t, f);
     return () => { for (const [t, f] of on) el.removeEventListener(t, f); };
@@ -89,6 +139,7 @@ export function BwalletxSignin(props: BwalletxSigninProps): ReactElement {
 
   const p = props;
   const flag = (v: boolean | undefined) => (v ? '' : undefined);
+  const state = driven ? signinStateFor(ctx) : undefined;
   return createElement('bwalletx-signin', {
     ref,
     id: p.id,
@@ -104,6 +155,16 @@ export function BwalletxSignin(props: BwalletxSigninProps): ReactElement {
     disabled: flag(p.disabled),
     'challenge-url': p.challengeUrl,
     'verify-url': p.verifyUrl,
+    'session-url': driven ? undefined : p.sessionUrl,
+    'logout-url': driven ? undefined : p.logoutUrl,
+    'lookup-url': p.lookupUrl,
+    stateless: p.stateful === false ? '' : undefined,
+    state,
+    'identity-key': driven ? (ctx.identityKey ?? undefined) : undefined,
+    paymail: driven ? (ctx.paymail ?? undefined) : undefined,
+    handle: driven ? (ctx.handle ?? undefined) : undefined,
+    'avatar-url': driven ? (avatarUrlFor(ctx.identityKey) ?? undefined) : undefined,
+    error: driven && ctx.status === 'error' ? signInErrorText(ctx.error) : undefined,
     'get-url': p.getUrl,
     'web-url': p.webUrl,
     href: p.href,
@@ -150,7 +211,7 @@ export interface BwalletXContextValue extends BwalletXState {
 
 export interface BwalletXProviderProps {
   children?: ReactNode;
-  /** POST { identityKey } → challenge. With verifyUrl, connect() also signs in. */
+  /** POST {} (or { identityKey }) → challenge. With verifyUrl, connect() also signs in, in ONE wallet sheet. */
   challengeUrl?: string;
   /** POST { identityKey, nonce, signature } → { identityKey, handle?, paymail? } and sets the cookie. */
   verifyUrl?: string;
@@ -160,8 +221,18 @@ export interface BwalletXProviderProps {
   sessionUrl?: string;
   /** Offer phone pairing with the built-in QR modal. Default true. */
   pairing?: boolean;
-  /** Show the built-in picker when more than one wallet is available. Default true. */
+  /**
+   * Show the built-in picker when there is a real choice. Default true. One wallet found in this browser (and no
+   * app-supplied option such as HandCash) is used straight away, with no picker; phone pairing is then not offered.
+   */
   picker?: boolean;
+  /**
+   * Your challenge route is older than 0.5.5 and needs the identity key first (two wallet sheets). Normally not
+   * needed: such a server is detected and retried. Upgrade the server to @bwalletx/connect 0.5.5 for one sheet.
+   */
+  challengeNeedsIdentityKey?: boolean;
+  /** Paymail lookup by identity key for the signed-in badge (best effort). Default pay.bwallet.space; 'off' to skip. */
+  lookupUrl?: string;
   /** Extra options, e.g. [handcashAdapter({ login })]. */
   extraWallets?: WalletOption[];
   /** Probe desktop wallets on localhost. Default false. */
@@ -250,45 +321,37 @@ export function BwalletXProvider(p: BwalletXProviderProps): ReactElement {
       setState((s) => ({ ...s, status: 'connecting', error: null }));
       try {
         const list = await listWallets();
-        let choice: WalletOption | null | undefined = opts.walletId ? list.find((w) => w.id === opts.walletId) : undefined;
-        if (!choice) {
-          const direct = list.filter((w) => w.kind !== 'pairing');
-          choice = c.picker !== false && list.length > 1 ? await pickWallet(list) : (direct[0] ?? list[0] ?? null);
-        }
-        if (!choice) {
-          if (!list.length) throw Object.assign(new Error('No wallet found. Get bWalletX at bwalletx.com.'), { code: 'NOT_FOUND' });
-          setState((s) => ({ ...s, status: s.identityKey ? 'connected' : 'idle' }));
+        const r = await runConnect({
+          list,
+          walletId: opts.walletId,
+          picker: c.picker,
+          pick: pickWallet,
+          challengeUrl: c.challengeUrl,
+          verifyUrl: c.verifyUrl,
+          challengeNeedsIdentityKey: c.challengeNeedsIdentityKey,
+          post: postJson,
+        });
+        if (!r) {
+          setState((s) => ({ ...s, status: s.identityKey && s.signedIn ? 'connected' : 'idle' }));
           return null;
         }
-        const cw = await choice.connect();
-        let { handle = null, paymail = null } = cw as { handle?: string | null; paymail?: string | null };
-        let signedIn = false;
-        if (cw.wallet && c.challengeUrl && c.verifyUrl) {
-          const r = await signInWithBwalletX({
-            wallet: cw.wallet,
-            challenge: (identityKey) => postJson(c.challengeUrl!, { identityKey }) as unknown as Promise<Challenge>,
-          });
-          const v = await atStage('verify', () => postJson(c.verifyUrl!, { identityKey: r.identityKey, nonce: r.nonce, signature: r.signature }));
-          handle = (v.handle as string | undefined) ?? handle;
-          paymail = (v.paymail as string | undefined) ?? paymail;
-          signedIn = true;
-        }
+        const cw = r.connected;
         payer.current = cw.payer;
         setState({
           status: 'connected',
-          identityKey: cw.identityKey,
-          handle,
-          paymail,
+          identityKey: r.identityKey,
+          handle: r.handle,
+          paymail: r.paymail,
           wallet: cw.wallet,
           walletId: cw.optionId,
           transitional: !!cw.transitional,
-          signedIn,
+          signedIn: r.signedIn,
           error: null,
         });
-        return cw;
+        return { ...cw, identityKey: r.identityKey, handle: r.handle ?? undefined, paymail: r.paymail ?? undefined };
       } catch (e) {
         if ((e as Error)?.message === 'cancelled') {
-          setState((s) => ({ ...s, status: s.identityKey ? 'connected' : 'idle' }));
+          setState((s) => ({ ...s, status: s.identityKey && s.signedIn ? 'connected' : 'idle' }));
           return null;
         }
         throw fail(e);
@@ -304,6 +367,19 @@ export function BwalletXProvider(p: BwalletXProviderProps): ReactElement {
     payer.current = null;
     setState(empty);
   }, [state.walletId]);
+
+  // Best-effort paymail for the badge when the server did not send one (pay.bwallet.space lookup by key).
+  useEffect(() => {
+    const key = state.identityKey;
+    if (!key || state.paymail || p.lookupUrl === 'off') return;
+    let live = true;
+    void lookupPaymail(key, p.lookupUrl).then((pm) => {
+      if (live && pm) setState((s) => (s.identityKey === key && !s.paymail ? { ...s, paymail: pm } : s));
+    });
+    return () => {
+      live = false;
+    };
+  }, [state.identityKey, state.paymail, p.lookupUrl]);
 
   const need = () => {
     if (!payer.current) throw new PaymentError('NOT_SUPPORTED', 'Connect a wallet first (connect()).');
@@ -334,7 +410,48 @@ export function useBwalletX(): BwalletXContextValue {
   return v;
 }
 
-export { handcashAdapter, brc100Option, pairingOption, discoverWallets } from './wallets.js';
+export type BwalletXAccountStatus = 'restoring' | 'signed-out' | 'pending' | 'signed-in' | 'error';
+
+export interface BwalletXAccount {
+  status: BwalletXAccountStatus;
+  identityKey: string | null;
+  paymail: string | null;
+  handle: string | null;
+  /** $alice, a site handle, the paymail, or a short key: what the badge shows. */
+  label: string | null;
+  /** The bAvatar picture for the identity key (gold by default), or null when signed out. */
+  avatarUrl: string | null;
+  /** One plain line for the last error ("Sign-in cancelled" for a no in the wallet), or null. */
+  error: string | null;
+  /** Sign in (the provider's connect(): one wallet sheet). Never throws; failures show in `status`/`error`. */
+  login(): Promise<void>;
+  /** Sign out: the provider's disconnect() (posts logoutUrl). */
+  logout(): Promise<void>;
+}
+
+/** The account view of a provider state (what useBwalletXAccount returns). */
+export function accountFor(v: BwalletXContextValue): BwalletXAccount {
+  const status = signinStateFor(v) as BwalletXAccountStatus;
+  const signedIn = status === 'signed-in';
+  return {
+    status,
+    identityKey: signedIn ? v.identityKey : null,
+    paymail: signedIn ? v.paymail : null,
+    handle: signedIn ? v.handle : null,
+    label: signedIn ? accountLabel(v) : null,
+    avatarUrl: signedIn ? avatarUrlFor(v.identityKey) : null,
+    error: status === 'error' ? signInErrorText(v.error) : null,
+    login: () => v.connect().then(() => undefined, () => undefined),
+    logout: () => v.disconnect(),
+  };
+}
+
+/** The signed-in account for your own UI: { status, identityKey, paymail, handle, avatarUrl, logout, … }. Inside <BwalletXProvider>. */
+export function useBwalletXAccount(): BwalletXAccount {
+  return accountFor(useBwalletX());
+}
+
+export { handcashAdapter, brc100Option, pairingOption, discoverWallets, autoChoice } from './wallets.js';
 export type { WalletOption, ConnectedWallet, HandCashAdapterOptions } from './wallets.js';
 export { PaymentError } from './pay.js';
 export type { PayRequest, PayResult, BuyTokenRequest, PayOptions } from './pay.js';
