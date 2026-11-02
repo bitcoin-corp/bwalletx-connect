@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.6 (unreleased)
+
+- **"Connect bWalletX" on a phone opens the app** (@photokuro, 2 Nov 2026: on his iPhone, Safari showed a QR and "Scan with your phone's camera", on the phone itself). `pairingModal()` now decides with `isPhoneWithoutWallet()` (mobile UA, or touch plus a narrow viewport, and no `window.CWI`). On a phone the primary action is a big gold **Open in bWalletX** through the app's own scheme, `bwalletx://pair?<the pairing parameters>` (`appPairLink()`; the app routes it to the same Connect sheet as a scanned QR), then **Don't have it? Get bWalletX** (`START_URL`, https://bwalletx.com/start) and a small **Show a QR for another device**. The phone sheet never says "scan with your phone's camera". Desktops keep the QR first.
+- **Pairing survives the trip to the app** (Jon: "the connection to bWalletX closed before pairing finished"). iOS closes a backgrounded page's socket; `pairBwalletX` no longer fails on that. It rejoins the same channel (same site claim) when the page is visible again (`PageLifecycle`, default the document's visibility), or after a short backoff for a blip, and the relay hands over the wallet's queued hello and ready. A timer that fires while the page is in the background never gives up before the page is back and has rejoined. The phone sheet asks for a 4-minute link (`lifetimeS`, default 120 s, clamped 30–240), and once the wallet has opened the link the user has at least another 2 minutes to tap Connect.
+- **Try again.** `PairingOptions.retry(err)`: a failed round (expired, declined, unreachable) can start a fresh one; `pairingModal()` shows the error with **Try again** / **Cancel**. Errors carry `code`: `EXPIRED`, `UNREACHABLE`, `DECLINED`, `CANCELLED`.
+- `PairingOptions.onPaired`: `pairingModal()` now closes itself when the wallet connects (the React provider path never closed it).
+
 ## 0.5.5 (unreleased)
 
 - **One wallet sheet to sign in** (owner escalation, 2 Nov 2026: "FIVE PROMPTS??? FOR ONE CONNECTION?" on vexvoid.com). Measured with bWalletX 5.2.48: 0.5.4 asked for a picker plus 3 sheets on localhost, and a picker plus 5 sheets on the live site. Now:

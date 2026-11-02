@@ -1,10 +1,14 @@
 import type { SocketLike } from '../src/pair';
 
-/** An in-memory stand-in for relay.bwallet.space: two roles per channel, frames passed through. */
+/**
+ * An in-memory stand-in for relay.bwallet.space: two roles per channel, frames passed through. With `queue`, frames
+ * for a side that is away wait and are delivered when it joins again (as the real relay does, relay/relay.mjs).
+ */
 export class FakeRelay {
   channels = new Map<string, { site?: FakeSocket; wallet?: FakeSocket }>();
+  queued = new Map<string, string[]>();
   urls: string[] = [];
-  constructor(public origin = 'https://example.com') {}
+  constructor(public origin = 'https://example.com', public opts: { queue?: boolean } = {}) {}
 
   socket = (url: string): SocketLike => {
     this.urls.push(url);
@@ -20,6 +24,8 @@ export class FakeRelay {
       s.readyState = 1;
       s.onopen?.({});
       if (role === 'wallet') s.deliver(JSON.stringify({ t: 'relay', verifiedOrigin: this.origin }));
+      const k = `${channel}|${role}`;
+      for (const f of this.queued.get(k)?.splice(0) ?? []) s.deliver(f);
     });
     return s;
   };
@@ -36,7 +42,7 @@ export class FakeSocket implements SocketLike {
   onmessage: ((ev: { data: unknown }) => void) | null = null;
   onerror: ((ev: unknown) => void) | null = null;
   onclose: ((ev: unknown) => void) | null = null;
-  constructor(private relay: FakeRelay, public channel: string, public role: 'site' | 'wallet') {}
+  constructor(public relay: FakeRelay, public channel: string, public role: 'site' | 'wallet') {}
   deliver(data: string) {
     this.onmessage?.({ data });
   }
@@ -45,6 +51,10 @@ export class FakeSocket implements SocketLike {
     const p = this.relay.peer(this);
     // Delivered synchronously, back to back, as a fast network can.
     if (p && p.readyState === 1) p.deliver(data);
+    else if (this.relay.opts.queue) {
+      const k = `${this.channel}|${this.role === 'site' ? 'wallet' : 'site'}`;
+      this.relay.queued.set(k, [...(this.relay.queued.get(k) ?? []), data]);
+    }
   }
   close() {
     if (this.readyState === 3) return;

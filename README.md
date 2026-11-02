@@ -153,7 +153,7 @@ Every expected output has to be matched by a different output that carries at le
 - phone pairing (`pairing: pairingModal()`)
 - any adapters you add in `extra`
 
-`pickWallet(list)` shows the picker. `pairingModal()` returns `PairingOptions` that draw the QR code and match code, so you no longer need your own QR library. On phones and tablets it shows an **Open bWalletX** button (the pairing universal link opens the app) and a web.bwalletx.com fallback instead of a QR; pass `mode: 'qr'` or `'app'` to force one.
+`pickWallet(list)` shows the picker. `pairingModal()` returns `PairingOptions` that draw the QR code and match code, so you no longer need your own QR library. On a phone or tablet with no wallet in the page (`isPhoneWithoutWallet()`: a mobile user agent, or touch plus a narrow viewport, and no `window.CWI`) it shows a big **Open in bWalletX** button (`bwalletx://pair?…`, `appPairLink()`), **Don't have it? Get bWalletX** (bwalletx.com/start), and the QR only behind **Show a QR for another device**; pass `mode: 'qr'` or `'app'` to force one. The modal closes itself once the wallet connects and offers **Try again** when a round fails (`PairingOptions.retry`). Pairing survives a trip to the app: if the browser's socket is closed while the user taps Connect there, it rejoins the relay channel when the page is visible again.
 
 ## Migrating from HandCash Connect
 
