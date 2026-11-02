@@ -1,7 +1,7 @@
 export { findBwalletX, discoverBwalletX, prewarmBwalletX, bindPrewarm, DEFAULT_DISCOVER_MS, BWALLETX_RDNS, RDNS_EXTENSION, RDNS_MOBILE } from './discover.js';
 export type { FoundWallet, FoundBy } from './discover.js';
 export { pairBwalletX, restorePairing, clearPairing } from './pair.js';
-export type { PairingOptions, PairConnectionOptions, PairStorage, PairedWallet, SocketLike, SocketFactory } from './pair.js';
+export type { PairingOptions, PairConnectionOptions, PairStorage, PairedWallet, SocketLike, SocketFactory, PageLifecycle } from './pair.js';
 export { signInWithBwalletX, signInAndVerify, connectBwalletX, waitIfLocked, challengeWantsIdentityKey, LOGIN_PROTOCOL } from './signin.js';
 export type { Challenge, SignInAndVerifyOptions, SignInOptions, SignInResult, SignInMethod, SignInStage, SignInStatus } from './signin.js';
 export { renderButton, LOGO_URL } from './button.js';
@@ -16,7 +16,7 @@ export { pay, tip, buyToken, amountInSats, resolvePaymailP2P, PaymentError, BRC2
 export type { PayRequest, PayResult, PayOptions, PayOutput, PaySource, LegacyPayer, Brc29Remittance, BuyTokenRequest, TokenQuote, PaymentErrorCode } from './pay.js';
 export { discoverWallets, brc100Option, pairingOption, handcashAdapter, autoChoice, cwiIsAnnounced } from './wallets.js';
 export type { WalletOption, ConnectedWallet, WalletKind, DiscoverWalletsOptions, HandCashAdapterOptions, ConnectOptions } from './wallets.js';
-export { isTouchDevice, pairingModal, pickWallet, qrSvg } from './modal.js';
+export { isTouchDevice, isPhoneWithoutWallet, appPairLink, START_URL, pairingModal, pickWallet, qrSvg } from './modal.js';
 export type { PairingModalOptions } from './modal.js';
 export { requestAccess, proveHoldings, toAccessError, throwIfAccessError } from './access-client.js';
 export type { RequestAccessOptions, RequestAccessResult, AccessChallengeLike } from './access-client.js';

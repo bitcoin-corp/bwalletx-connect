@@ -57,7 +57,51 @@ export interface PairingOptions extends PairConnectionOptions {
   relay?: string;
   /** This page's origin, as the relay will see it. Default location.origin. */
   origin?: string;
+  /**
+   * How long (seconds) the wallet has to open the link. Default 120 (QR_LIFETIME_S); clamped to 30–240 (the relay
+   * refuses more than 300). Once the wallet has opened it, the user gets at least another 2 minutes to tap Connect.
+   */
+  lifetimeS?: number;
+  /**
+   * The round failed (the code expired, the wallet declined, the pairing service was unreachable). Resolve true to
+   * start a fresh round (a new link through `onLink`), false to give up with that error. Not called on cancel.
+   * pairingModal() shows the error with Try again / Cancel.
+   */
+  retry?: (err: Error) => Promise<boolean>;
+  /** Called once the wallet has connected, before the promise resolves (pairingModal() closes itself here). */
+  onPaired?: () => void;
+  /** Whether this page is visible, and a way to hear when it is again. Default: the document's visibility. */
+  page?: PageLifecycle;
 }
+
+/**
+ * The page's visibility. On a phone, "Open in bWalletX" leaves the browser for the app, and iOS may kill this page's
+ * socket while the user taps Connect there. Pairing rejoins the relay channel when the page is visible again; the
+ * relay hands over what the wallet sent meanwhile.
+ */
+export interface PageLifecycle {
+  visible(): boolean;
+  /** Call `cb` whenever the page becomes visible again. Returns an unsubscribe. */
+  onVisible(cb: () => void): () => void;
+}
+
+export const browserPage: PageLifecycle = {
+  visible: () => typeof document === 'undefined' || document.visibilityState !== 'hidden',
+  onVisible(cb) {
+    if (typeof document === 'undefined' || typeof window === 'undefined') return () => {};
+    const on = () => {
+      if (document.visibilityState !== 'hidden') cb();
+    };
+    document.addEventListener('visibilitychange', on);
+    window.addEventListener('pageshow', on);
+    window.addEventListener('focus', on);
+    return () => {
+      document.removeEventListener('visibilitychange', on);
+      window.removeEventListener('pageshow', on);
+      window.removeEventListener('focus', on);
+    };
+  },
+};
 
 /** A BRC-100 wallet whose every call goes, end-to-end encrypted, to the paired phone or web wallet. */
 export type PairedWallet = WalletInterface & {
@@ -81,6 +125,17 @@ interface StoredPairing {
 
 const DEFAULT_KEY = 'bwalletx.connect.pairing.v1';
 const OPEN = 1;
+/** After the wallet's hello, the user still has this long to tap Connect (they may be reading the sheet in the app). */
+const READY_WINDOW_MS = 120_000;
+/** Connected this long after coming back, with nothing from the wallet: the relay has handed over all it held. */
+const SETTLE_MS = 3_000;
+/** Back on the page but unable to rejoin the relay for this long: give up. */
+const REJOIN_GRACE_MS = 15_000;
+const REJOIN_MAX_MS = 8_000;
+
+const pairError = (message: string, code: 'EXPIRED' | 'UNREACHABLE' | 'DECLINED' | 'CANCELLED') =>
+  Object.assign(new Error(message), { code });
+const cancelled = () => pairError('cancelled', 'CANCELLED');
 
 function memoryStorage(): PairStorage {
   const m = new Map<string, string>();
@@ -272,48 +327,94 @@ class Link {
 }
 
 /**
- * Pair with bWalletX on a phone (scan the QR) or web.bwalletx.com (paste the link).
- * Resolves with a wallet once the user taps Connect. The pairing is stored (see `storage`) so
- * `restorePairing()` can reconnect after a reload without a new QR.
+ * Pair with bWalletX on a phone (scan the QR, or "Open in bWalletX" on the same phone) or web.bwalletx.com (paste
+ * the link). Resolves with a wallet once the user taps Connect. The pairing is stored (see `storage`) so
+ * `restorePairing()` can reconnect after a reload without a new QR. With `retry`, a failed round can start again.
  */
-export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
+export async function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
+  for (;;) {
+    try {
+      const w = await pairRound(opts);
+      opts.onPaired?.();
+      return w;
+    } catch (e) {
+      const err = e as Error & { code?: string };
+      if (!opts.retry || opts.signal?.aborted || err.code === 'CANCELLED' || err.message === 'cancelled') throw e;
+      const again = await opts.retry(err).catch(() => false);
+      if (opts.signal?.aborted) throw cancelled();
+      if (!again) throw e;
+    }
+  }
+}
+
+/** One pairing round: one channel, one link. */
+function pairRound(opts: PairingOptions): Promise<PairedWallet> {
   const storage = opts.storage === undefined ? defaultStorage() : (opts.storage ?? memoryStorage());
   const key = opts.storageKey ?? DEFAULT_KEY;
   const socket = opts.socket ?? defaultSocket();
   const relay = opts.relay ?? DEFAULT_RELAY;
+  const page = opts.page ?? browserPage;
   const origin = opts.origin ?? (typeof location !== 'undefined' ? location.origin : '');
   if (!origin) return Promise.reject(new Error('pairBwalletX needs options.origin outside a browser'));
 
+  const lifetimeS = Math.min(240, Math.max(30, Math.floor(opts.lifetimeS ?? QR_LIFETIME_S)));
   const siteKey = PrivateKey.fromRandom(); // a throwaway pairing key, not a wallet key
   const channel = newChannel();
-  const expiry = Math.floor(Date.now() / 1000) + QR_LIFETIME_S;
+  const expiry = Math.floor(Date.now() / 1000) + lifetimeS;
   // b-Aware 26 Oct 2026: our own role claim (N3-1), and the digest of the wallet claim only the QR can produce (N3-2).
   const siteClaim = newClaim();
   const sitePub = siteKey.toPublicKey().toString();
 
   return walletClaimFor(channel, sitePub).then(claimDigest).then((wc) => new Promise<PairedWallet>((resolve, reject) => {
-    if (opts.signal?.aborted) return reject(new Error('cancelled'));
-    let ws: SocketLike;
-    try {
-      ws = socket(relaySocketUrl(relay, channel, 'site', expiry, siteClaim, wc));
-    } catch (e) {
-      return reject(e);
-    }
+    if (opts.signal?.aborted) return reject(cancelled());
+    const url = relaySocketUrl(relay, channel, 'site', expiry, siteClaim, wc);
+    let ws: SocketLike | null = null;
     let sealer: Sealer | null = null;
     let walletKey = '';
     let settled = false;
+    let everOpened = false;
+    let openedAt = 0;
+    let backAt = Date.now();
+    let deadline = Date.now() + lifetimeS * 1000;
+    let rejoins = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let rejoinTimer: ReturnType<typeof setTimeout> | null = null;
+    let unwatch = () => {};
+    const stop = () => {
+      clearTimeout(timer);
+      if (rejoinTimer) clearTimeout(rejoinTimer);
+      unwatch();
+    };
     const fail = (e: Error) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
-      ws.close();
+      stop();
+      if (ws) {
+        ws.onclose = null;
+        ws.close();
+      }
       reject(e);
     };
-    const timer = setTimeout(() => fail(new Error('The pairing code expired. Show a new one.')), QR_LIFETIME_S * 1000);
-    opts.signal?.addEventListener('abort', () => fail(new Error('cancelled')));
-    ws.onerror = () => fail(new Error('Could not reach the bWalletX pairing service'));
-    ws.onclose = () => fail(new Error('The connection to bWalletX closed before pairing finished'));
-    ws.onmessage = inOrder(async (ev: { data: unknown }) => {
+    const arm = (ms: number) => {
+      clearTimeout(timer);
+      timer = setTimeout(check, ms);
+    };
+    // Past the deadline, give up only once we have heard everything the relay held for us. A page coming back from
+    // the app may be resuming a timer that fired while it slept, before its socket has rejoined.
+    function check() {
+      if (settled) return;
+      const now = Date.now();
+      if (now < deadline) return arm(deadline - now);
+      const expired = () => fail(pairError('The pairing code expired. Show a new one.', 'EXPIRED'));
+      if (ws && ws.readyState === OPEN) return now - openedAt >= SETTLE_MS ? expired() : arm(SETTLE_MS - (now - openedAt));
+      if (!page.visible()) return arm(SETTLE_MS); // away in the app: decide when the page is back
+      if (now - backAt >= REJOIN_GRACE_MS) return expired();
+      arm(1_000);
+    }
+    arm(lifetimeS * 1000);
+    opts.signal?.addEventListener('abort', () => fail(cancelled()));
+
+    const onMessage = inOrder(async (ev: { data: unknown }) => {
       if (settled) return;
       let f: unknown;
       try {
@@ -325,24 +426,71 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
         walletKey = (f as HelloFrame).k;
         const s = await deriveSession(siteKey, walletKey, channel);
         sealer = new Sealer(s.key, 'site');
+        deadline = Math.max(deadline, Date.now() + READY_WINDOW_MS);
         opts.onCode(s.code);
         return;
       }
       if (!sealer || !isSealed(f)) return;
       const msg = await sealer.open(f);
-      if (!msg) return;
+      if (!msg || settled) return;
       if (msg.t === 'ready') {
+        const live = ws;
+        if (!live) return;
         settled = true;
-        clearTimeout(timer);
+        stop();
         const p: StoredPairing = { v: 1, c: channel, r: relay, s: siteKey.toHex(), k: walletKey, ...sealer.counters, pairedAt: Date.now(), sc: siteClaim };
         await Promise.resolve(storage.setItem(key, JSON.stringify(p))).catch(() => {});
         const link = new Link(p, sealer, storage, key, socket, opts.callTimeoutMs ?? 120_000);
-        link.adopt(ws);
+        link.adopt(live);
         resolve(link.wallet());
       } else if (msg.t === 'close') {
-        fail(new Error('Pairing was declined in bWalletX'));
+        fail(pairError('Pairing was declined in bWalletX', 'DECLINED'));
       }
     });
+
+    const unreachable = () => fail(pairError('Could not reach the bWalletX pairing service', 'UNREACHABLE'));
+    const rejoinLater = () => {
+      if (settled || rejoinTimer || ws) return;
+      if (!page.visible()) return; // onVisible rejoins
+      const ms = Math.min(500 * 2 ** rejoins++, REJOIN_MAX_MS);
+      rejoinTimer = setTimeout(() => {
+        rejoinTimer = null;
+        if (!ws) join();
+      }, ms);
+    };
+    function join() {
+      if (settled) return;
+      let s: SocketLike;
+      try {
+        s = socket(url);
+      } catch (e) {
+        if (everOpened) return rejoinLater();
+        return fail(e as Error);
+      }
+      ws = s;
+      s.onopen = () => {
+        everOpened = true;
+        openedAt = Date.now();
+        rejoins = 0;
+      };
+      s.onmessage = onMessage;
+      // Before the first open this is "unreachable"; after it, onclose follows and we rejoin.
+      s.onerror = () => {
+        if (!everOpened) unreachable();
+      };
+      s.onclose = () => {
+        if (ws !== s || settled) return;
+        ws = null;
+        if (!everOpened) return unreachable();
+        // Left for the app (or a network blip): rejoin the same channel, now or when the page is visible again.
+        rejoinLater();
+      };
+    }
+    unwatch = page.onVisible(() => {
+      backAt = Date.now();
+      if (!ws && !rejoinTimer) join();
+    });
+    join();
     opts.onLink(pairUrl({ v: PAIR_VERSION, r: relay, c: channel, k: sitePub, o: origin, e: expiry }));
   }));
 }
