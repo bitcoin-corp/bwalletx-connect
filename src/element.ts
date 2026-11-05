@@ -145,7 +145,7 @@ button[aria-busy=true]{cursor:wait}
 /* "Other wallets" (0.5.6): one small link under the button */
 .ow{margin:8px 0 0;width:0;min-width:100%;font-size:12px;line-height:1.4;color:#71717a;text-align:center}
 :host([theme=dark]) .ow,:host-context(.dark) .ow{color:#a1a1aa}
-.sw{margin:8px 0 0;width:0;min-width:100%;font-size:12px;line-height:1.4;color:#92400e;text-align:center}
+.sw{margin:8px 0 0;width:0;min-width:100%;font-size:12px;line-height:1.4;color:#a16207;text-align:center}
 :host([theme=dark]) .sw,:host-context(.dark) .sw{color:#fcd34d}
 .lnk{all:unset;cursor:pointer;color:inherit;font-weight:600;text-decoration:underline;text-underline-offset:2px}
 .lnk:focus-visible{outline:2px solid #b45309;outline-offset:2px;border-radius:2px}
@@ -206,6 +206,13 @@ export type SigninMode = 'signin' | 'chooser' | 'bwalletx';
 
 /** (0.6.0) The note shown when the remembered or connected wallet isn't bWalletX. */
 export const SWITCH_NOTE = 'Some features need bWalletX';
+/** (0.6.0) The button's label when the tap goes to a remembered wallet that isn't bWalletX. */
+export const CONTINUE_OTHER_LABEL = 'Continue with your wallet';
+
+/** A neutral wallet glyph: the button must not show bWalletX's "b" when the tap goes to another wallet. */
+function walletGlyph(px: number): string {
+  return `<svg viewBox="0 0 24 24" width="${px}" height="${px}" aria-hidden="true" focusable="false" fill="none" stroke="#FFD24D" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 7V5a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2"/><path d="M3 6v12a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-3"/></svg>`;
+}
 
 /** Optional OAuth parameters for authorize-url mode. auth.bwalletx.com is planned, not live. */
 export interface AuthorizeParams { authorizeUrl: string; clientId?: string | null; redirectUri?: string | null; scope?: string | null }
@@ -377,10 +384,12 @@ function createClass(): CustomElementConstructor {
       const restoring = state === 'restoring';
       const error = state === 'error';
       const pendingLabel = this.#controlled ? PENDING_LABEL : this.#pendingLabel;
-      const text = pending ? pendingLabel : error ? 'Retry' : signinText((this.#attr('label') ?? 'signin') as SigninLabel, brand);
+      // 0.6.0: the tap goes to a remembered wallet that isn't bWalletX, so the button says so (and drops the "b").
+      const elsewhere = state === 'signed-out' && needsBwalletX(this.#walletType());
+      const text = pending ? pendingLabel : error ? 'Retry' : elsewhere ? CONTINUE_OTHER_LABEL : signinText((this.#attr('label') ?? 'signin') as SigninLabel, brand);
       const subAttr = this.#attr('subtitle');
       const subDefault = brand === 'bWalletX' && (size === 'lg' || size === 'md') ? 'also works with bWallet' : null;
-      const subtitle = pending || error ? null : subAttr === null || subAttr === '' || subAttr === 'on' ? (subAttr === 'on' ? 'also works with bWallet' : subDefault)
+      const subtitle = pending || error || elsewhere ? null : subAttr === null || subAttr === '' || subAttr === 'on' ? (subAttr === 'on' ? 'also works with bWallet' : subDefault)
         : subAttr === 'off' ? null : subAttr;
       const loading = this.hasAttribute('loading') || this.#busy || pending || restoring;
       const disabled = this.hasAttribute('disabled');
@@ -391,7 +400,7 @@ function createClass(): CustomElementConstructor {
       const errText = error ? (this.#controlled ? this.#attr('error') : this.#error) || 'Sign-in failed' : '';
 
       const label = size === 'icon' ? '' : `<span class="txt" part="text"><b part="label">${esc(text)}</b>${subtitle ? `<small part="subtitle">${esc(subtitle)}</small>` : ''}</span>`;
-      const mark = loading ? '<span class="spin" aria-hidden="true"></span>' : markSvg(markPx);
+      const mark = loading ? '<span class="spin" aria-hidden="true"></span>' : elsewhere ? walletGlyph(markPx - 4) : markSvg(markPx);
       const otherOff = this.#attr('other-wallets') === 'off';
       const otherLink = '<button type="button" class="lnk" data-act="other" part="other-wallets-link">Other wallets</button>';
       const nf = this.#notFound

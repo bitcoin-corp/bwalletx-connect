@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wallet choice demo</title>
+<!--
+  Static demo of the wallet-choice rules (0.5.6 / 0.6.0). Build first (pnpm build), then open
+  examples/wallet-choice.html#present | #absent | #remembered | #other. Wallets are fakes that announce through
+  BRC-100 discovery exactly like bWalletX (com.bwalletx.extension) and Yours (io.yours); the sign-in routes are
+  stubbed. Nothing leaves the page.
+-->
+<script>
+  // Fake site routes: a challenge the fake wallets "sign" (they never answer, so the pending state stays on screen).
+  const realFetch = window.fetch.bind(window);
+  window.fetch = async (url, init) => {
+    if (url === '/demo/challenge') return new Response(JSON.stringify({ nonce: 'demo', message: 'demo', keyID: 'demo' }), { headers: { 'content-type': 'application/json' } });
+    if (String(url).startsWith('/demo/')) return new Response('{}', { headers: { 'content-type': 'application/json' } });
+    return realFetch(url, init);
+  };
+  const state = (location.hash || '#present').slice(1);
+  const fake = () => ({
+    isAuthenticated: async () => ({ authenticated: true }),
+    getPublicKey: () => new Promise(() => {}),
+    createSignature: () => new Promise(() => {}),
+  });
+  const announce = (rdns, name) => {
+    const wallet = fake();
+    window.addEventListener('brc100:requestWallet', () =>
+      window.dispatchEvent(new CustomEvent('brc100:announceWallet', { detail: { info: { rdns, name, uuid: rdns }, wallet } })));
+  };
+  try { localStorage.removeItem('bwx:wallet'); } catch {}
+  if (state === 'present' || state === 'other' || state === 'remembered') announce('com.bwalletx.extension', 'bWalletX');
+  if (state !== 'present') announce('io.yours', 'Yours Wallet');
+  if (state === 'remembered') localStorage.setItem('bwx:wallet', JSON.stringify({ type: 'io.yours', substrate: 'injected', v: 1 }));
+</script>
+<script src="../dist/bwalletx-connect.global.js"></script>
+<style>
+  :root { --bg: #f6f4ef; --card: #ffffff; --ink: #18160f; --muted: #6b6455; --line: #e6e0d2; --gold: #b7791f; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0d0c0a; --card: #16140f; --ink: #f4f1e8; --muted: #a39b86; --line: #2c281e; --gold: #e8c766; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 24px; border-bottom: 1px solid var(--line); background: var(--card); }
+  .brand { font-weight: 800; letter-spacing: -.01em; }
+  .brand span { color: var(--gold); }
+  .pill { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; white-space: nowrap; }
+  main { max-width: 980px; margin: 0 auto; padding: 40px 24px 64px; }
+  h1 { font-size: 28px; line-height: 1.15; margin: 0 0 6px; letter-spacing: -.02em; }
+  .lede { color: var(--muted); margin: 0 0 28px; max-width: 60ch; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 24px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 16px; font-weight: 600; }
+  .card p { color: var(--muted); font-size: 13px; margin: 14px 0 0; }
+  .rule { margin-top: 28px; font-size: 13px; color: var(--muted); border-left: 3px solid var(--gold); padding: 2px 0 2px 12px; }
+  @media (max-width: 600px) { header { padding: 12px 16px; } main { padding: 24px 16px 48px; } h1 { font-size: 22px; } .card { padding: 18px; } }
+</style>
+</head>
+<body>
+<header><div class="brand">demo<span>.site</span></div><div class="pill" id="pill"></div></header>
+<main>
+  <h1 id="title"></h1>
+  <p class="lede" id="lede"></p>
+  <div class="grid" id="grid"></div>
+  <p class="rule" id="rule"></p>
+</main>
+<script>
+  const S = {
+    present: {
+      pill: 'bWalletX installed',
+      title: 'bWalletX here: straight to its sheet',
+      lede: 'One tap opens the bWalletX approval. No site chooser in between; other wallets sit behind a small link.',
+      rule: 'Recognised by its own announcement (com.bwalletx.extension), never by who holds window.CWI.',
+      cards: [['Signed out', false], ['After one tap', true]],
+    },
+    absent: {
+      pill: 'Yours installed, no bWalletX',
+      title: 'No bWalletX: the chooser, Get bWalletX first',
+      lede: 'Another wallet is listed, but it is only connected if you pick it. Nothing probes localhost until you tap Desktop wallet.',
+      rule: 'Before 0.5.6 a lone Yours or Metanet wallet was connected with no chooser.',
+      cards: [['Sign in', true]],
+    },
+    remembered: {
+      pill: 'Returning visitor · picked Yours here before',
+      title: 'Remembered wallet: one tap, and a way back',
+      lede: 'The next tap goes straight to the wallet picked on this site before (its type only, never a key). Nothing fires on load.',
+      rule: 'Remembered: localStorage bwx:wallet = { "type": "io.yours", "substrate": "injected" }.',
+      cards: [['Returning visitor', false]],
+    },
+    other: {
+      pill: 'bWalletX and Yours installed',
+      title: '“Other wallets”: the chooser on request',
+      lede: 'Phone QR, other browser wallets and desktop wallets, with bWalletX still first.',
+      rule: 'Desktop wallet looks on localhost:3321 only when tapped, so Chrome’s Local Network Access prompt follows a tap.',
+      cards: [['Sign in', false]],
+    },
+  }[state] || {};
+  document.getElementById('pill').textContent = S.pill;
+  document.getElementById('title').textContent = S.title;
+  document.getElementById('lede').textContent = S.lede;
+  document.getElementById('rule').textContent = S.rule;
+  const grid = document.getElementById('grid');
+  const els = (S.cards || []).map(([label, tap]) => {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `<h2>${label}</h2>`;
+    const el = document.createElement('bwalletx-signin');
+    el.setAttribute('challenge-url', '/demo/challenge');
+    el.setAttribute('verify-url', '/demo/verify');
+    el.setAttribute('lookup-url', 'off');
+    el.setAttribute('full-width', '');
+    el.setAttribute('discover-ms', '150');
+    card.append(el);
+    grid.append(card);
+    return { el, tap };
+  });
+  setTimeout(() => {
+    for (const { el, tap } of els) if (tap) el.button.click();
+    if (state === 'other') els[0].el.otherWallets();
+  }, 50);
+</script>
+</body>
+</html>

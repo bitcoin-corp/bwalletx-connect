@@ -7,7 +7,7 @@ export type { Challenge, SignInAndVerifyOptions, SignInOptions, SignInResult, Si
 export { renderButton, LOGO_URL } from './button.js';
 export type { ButtonOptions } from './button.js';
 export { inOrder } from './in-order.js';
-export { defineBwalletxSignin, buildAuthorizeUrl, signinText, markSvg, SIGNIN_TAG, SIGNIN_CSS, MENU_CSS, PENDING_NOTE, PENDING_LABEL, PENDING_LABEL_OTHER, SWITCH_NOTE, GET_URL, WEB_WALLET_URL } from './element.js';
+export { defineBwalletxSignin, buildAuthorizeUrl, signinText, markSvg, SIGNIN_TAG, SIGNIN_CSS, MENU_CSS, PENDING_NOTE, PENDING_LABEL, PENDING_LABEL_OTHER, SWITCH_NOTE, CONTINUE_OTHER_LABEL, GET_URL, WEB_WALLET_URL } from './element.js';
 export type { SigninSize, SigninTheme, SigninLabel, SigninBrand, SigninState, SigninAccount, SigninMode, AuthorizeParams } from './element.js';
 export { accountLabel, avatarUrlFor, lookupPaymail, shortKey, isUserRejection, signInErrorText, rememberedIdentity, rememberIdentity, IDENTITY_HINT_KEY, PAYMAIL_LOOKUP_URL, BAVATAR_URL } from './account.js';
 export { defineBwalletxButton, getUrlFor, stateFor, handleLabel, dropLegacyConnectedKey, BUTTON_TAG, CONNECTED_KEY } from './wallet-button.js';

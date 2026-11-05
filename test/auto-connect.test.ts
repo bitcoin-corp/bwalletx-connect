@@ -15,7 +15,7 @@ import {
   WALLET_CHOICE_KEY,
 } from '../src/choice';
 import { runConnect } from '../src/connect-flow';
-import { defineBwalletxSignin, SWITCH_NOTE } from '../src/element';
+import { CONTINUE_OTHER_LABEL, defineBwalletxSignin, SWITCH_NOTE } from '../src/element';
 import { createChallenge, memoryStore, verifySignIn } from '../src/server';
 
 const ORIGIN = 'https://example.com';
@@ -226,6 +226,7 @@ describe('<bwalletx-signin> 0.6.0: remembered tap, Switch note, Disconnect forge
     const el = mount(base);
     await tick(30);
     expect(q(el, '.sw')?.textContent).toBe(`${SWITCH_NOTE} · Switch`);
+    expect(el.button.textContent).toBe(CONTINUE_OTHER_LABEL); // the tap goes to Yours: the button says so
     expect(y.calls).toEqual([]);
     expect(b.calls).toEqual([]);
     el.button.click();
