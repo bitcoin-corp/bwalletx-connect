@@ -13,8 +13,14 @@
  * (`[data-bwx-connect]`, `.nav-connect`, `.nav-acct`, links to bwalletx.com/get) are hidden, each with a
  * console warning. Use only this element; don't add your own Get or Connect links.
  *
+ * ON LOAD: discovery only (0.5.6). No wallet call, so no key leaves the wallet and no wallet shows a prompt without a
+ * tap. A reload shows Connect again unless `session-url` reports a live session from your server (no wallet call);
+ * one tap reconnects (bWalletX answers an approved site without a sheet). Nothing is stored: the old `bwx:connected`
+ * entry held the identity key and is deleted on load.
+ *
  * Attributes: size (sm | md | lg, default sm), get-url (overrides the platform link), discover-ms (default 800),
- * lookup-url (handle lookup, default pay.bwallet.space; "off" to skip).
+ * lookup-url (handle lookup, default pay.bwallet.space; "off" to skip), session-url (GET → { identityKey, paymail? }
+ * from your server: shows the chip on load with no wallet call).
  * Events (bubble, composed): bwalletx-connected { identityKey }, bwalletx-disconnected.
  */
 import { discoverBwalletX } from './discover.js';
@@ -24,7 +30,19 @@ import { pairingModal } from './modal.js';
 import { markSvg, SIGNIN_CSS } from './element.js';
 
 export const BUTTON_TAG = 'bwalletx-button';
+/** Legacy (0.5.5) localStorage key that held the identity key. Deleted on load since 0.5.6; never written. */
 export const CONNECTED_KEY = 'bwx:connected';
+
+/** Delete the 0.5.5 `bwx:connected` entry (it held the identity key). True when one was there. */
+export function dropLegacyConnectedKey(): boolean {
+  try {
+    const had = globalThis.localStorage?.getItem(CONNECTED_KEY) != null;
+    if (had) globalThis.localStorage?.removeItem(CONNECTED_KEY);
+    return had;
+  } catch {
+    return false;
+  }
+}
 const LOOKUP = 'https://pay.bwallet.space/api/paymail/lookup?key=';
 const LEGACY = '[data-bwx-connect], .nav-connect, .nav-acct, a[href^="https://bwalletx.com/get"], a[href^="https://www.bwalletx.com/get"]';
 
@@ -95,27 +113,34 @@ function createClass(): CustomElementConstructor {
       }
       live.add(this);
       this.#hideLegacy();
-      const saved = this.#saved();
+      dropLegacyConnectedKey();
       const phone = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
       this.#set(stateFor({ connected: false, found: null, phone }));
       const ms = Number(this.getAttribute('discover-ms')) || 800;
-      void discoverBwalletX(ms).then(async (f) => {
+      // Discovery only: no wallet call on load (no key leaves the wallet, no prompt without a tap).
+      void discoverBwalletX(ms).then((f) => {
         if (!this.isConnected) return;
-        if (f && saved) {
-          try {
-            const { publicKey } = await f.wallet.getPublicKey({ identityKey: true });
-            this.#connected(publicKey);
-            return;
-          } catch { /* the wallet said no: offer Connect */ }
-        }
         if (this.#state !== 'connected' && this.#state !== 'connecting') this.#set(stateFor({ connected: false, found: !!f, phone }));
       }).catch(() => { if (this.#state === 'checking') this.#set('none'); });
+      void this.#restoreSession();
+    }
+
+    /** A live session your server reports (session-url): the chip, with no wallet call. */
+    async #restoreSession() {
+      const url = this.getAttribute('session-url');
+      if (!url) return;
+      try {
+        const r = await fetch(url, { credentials: 'include', headers: { accept: 'application/json' } });
+        const j = (await r.json().catch(() => ({}))) as { identityKey?: string | null; paymail?: string | null };
+        if (j.identityKey && this.isConnected && this.#state !== 'connected' && this.#state !== 'connecting') {
+          this.#connected(j.identityKey);
+          if (j.paymail) { this.#paymail = j.paymail; this.#render(); }
+        }
+      } catch { /* no session */ }
     }
 
     disconnectedCallback() { if (!this.#duplicate) live.delete(this); }
 
-    #saved(): string | null { try { return localStorage.getItem(CONNECTED_KEY); } catch { return null; } }
-    #store(k: string | null) { try { if (k) localStorage.setItem(CONNECTED_KEY, k); else localStorage.removeItem(CONNECTED_KEY); } catch { /* private mode */ } }
 
     #hideLegacy() {
       const scope = this.closest('header, nav') ?? document;
@@ -132,7 +157,7 @@ function createClass(): CustomElementConstructor {
     #set(s: ButtonState) { this.#state = s; this.setAttribute('state', s); this.#render(); }
 
     #connected(key: string) {
-      this.#key = key; this.#store(key); this.#set('connected');
+      this.#key = key; this.#set('connected');
       this.#emit('bwalletx-connected', { identityKey: key });
       const lookup = this.getAttribute('lookup-url');
       if (lookup === 'off') return;
@@ -160,7 +185,7 @@ function createClass(): CustomElementConstructor {
     disconnect() {
       try { clearPairing(); } catch { /* none */ }
       try { window.postMessage({ type: 'bwallet:disconnect' }, location.origin); } catch { /* no window */ }
-      this.#key = null; this.#paymail = null; this.#store(null);
+      this.#key = null; this.#paymail = null; dropLegacyConnectedKey();
       this.#set('available');
       this.#emit('bwalletx-disconnected');
     }

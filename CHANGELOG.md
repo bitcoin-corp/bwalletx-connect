@@ -12,6 +12,7 @@ Wallet choice (RB, 5 Nov 2026: bWalletX is the default on our sites; no other wa
 - **Telemetry hook**: `onAttempt` (provider prop / `runConnect` option) and the `bwalletx-attempt` event: `{ walletType, substrate, outcome, ms }` per attempt, nothing else.
 - `WalletOption.substrate`, `walletTypeOf`, `substrateOf`, `isPresentBwalletX`, `hasBwalletX`, `otherDetected`; `discoverWallets` also finds bWalletX in its app frame (XDM). `useBwalletX().walletType`.
 - Element: picking another wallet shows "Approve in your wallet…"; closing the phone QR returns to the button without an error.
+- **`<bwalletx-button>`: no wallet calls on load.** It used to call `getPublicKey` on load when `bwx:connected` was set, and stored the identity key there. Now it does discovery only; `bwx:connected` is deleted on load (`dropLegacyConnectedKey`) and never written; a reload shows Connect, and one tap reconnects. New `session-url` shows the chip from your server's session with no wallet call.
 
 ## 0.5.5 (unreleased)
 
