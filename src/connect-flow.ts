@@ -5,7 +5,10 @@
 import { rememberIdentity, rememberedIdentity } from './account.js';
 import { signInAndVerify, type Challenge } from './signin.js';
 import type { ConnectedWallet, Substrate, WalletOption } from './wallets.js';
-import { attemptFor, decideWallet, outcomeOf, reportAttempt, substrateOf, walletTypeOf, type AttemptHook, type ChoiceReason } from './choice.js';
+import {
+  attemptFor, decideWallet, isExplicitPick, outcomeOf, rememberWalletChoice, reportAttempt, substrateOf, walletTypeOf,
+  type AttemptHook, type ChoiceReason, type RememberedWallet,
+} from './choice.js';
 
 export interface ConnectFlowOptions {
   /** The wallets found (discoverWallets). */
@@ -21,6 +24,15 @@ export interface ConnectFlowOptions {
    * chooser opens ("Get bWalletX" first) and no other wallet is connected unless picked. false: the 0.5.5 rule.
    */
   fastPath?: boolean;
+  /**
+   * (0.6.0) The wallet picked on this origin before (rememberedWalletChoice()). When it is here, the tap goes straight
+   * to it, with no chooser, even when it isn't bWalletX (the user chose it).
+   */
+  remembered?: RememberedWallet | null;
+  /** (0.6.0) After a successful connect the user explicitly picked, remember the wallet type for this origin. */
+  remember?: boolean;
+  /** (0.6.0) "Switch" to bWalletX: ignore a remembered other wallet (bWalletX here, else the chooser). */
+  preferBwalletX?: boolean;
   /** Show the chooser; resolves null when closed. chooseWallet (modal.ts) or your own UI. */
   pick: (list: WalletOption[]) => Promise<WalletOption | null>;
   /** With verifyUrl: sign in after connecting. */
@@ -53,7 +65,14 @@ export async function runConnect(o: ConnectFlowOptions): Promise<ConnectFlowResu
   let choice: WalletOption | null = null;
   let reason: ChoiceReason = 'none';
   try {
-    const d = decideWallet(list, { walletId: o.walletId, chooser: o.chooser, picker: o.picker, fastPath: o.fastPath });
+    const d = decideWallet(list, {
+      walletId: o.walletId,
+      chooser: o.chooser,
+      picker: o.picker,
+      fastPath: o.fastPath,
+      remembered: o.remembered,
+      preferBwalletX: o.preferBwalletX,
+    });
     choice = d.option;
     reason = d.reason;
     if (!choice && d.reason === 'chooser') choice = await o.pick(list);
@@ -87,6 +106,7 @@ export async function runConnect(o: ConnectFlowOptions): Promise<ConnectFlowResu
     } else if (cw.wallet && !identityKey) {
       identityKey = (await cw.wallet.getPublicKey({ identityKey: true })).publicKey;
     }
+    if (o.remember && isExplicitPick(choice, reason)) rememberWalletChoice(choice);
     reportAttempt(o.onAttempt, attemptFor(choice, signedIn ? 'signed-in' : 'connected', started));
     return { connected: cw, identityKey, handle, paymail, signedIn, walletType: walletTypeOf(choice), substrate: substrateOf(choice), reason };
   } catch (e) {

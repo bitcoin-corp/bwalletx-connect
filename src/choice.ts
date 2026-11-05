@@ -8,12 +8,14 @@
  *   3. No bWalletX → the chooser, "Get bWalletX" first, then whatever was detected. Another wallet is never connected
  *      without the user picking it.
  *   4. Nothing probes localhost until the user taps "Desktop wallet" (desktopOption).
+ *   5. (0.6.0) A returning visitor goes straight to the wallet they explicitly picked on this origin before. Only the
+ *      wallet TYPE is remembered (localStorage, so per origin), never a key. Nothing that could prompt fires on load.
  *
  * Pure functions: the provider, runConnect and <bwalletx-signin> all decide with decideWallet().
  */
 import { RDNS_EXTENSION, RDNS_MOBILE } from './discover.js';
 import { isUserRejection } from './account.js';
-import { autoChoice, DESKTOP_OPTION_ID, type Substrate, type WalletOption } from './wallets.js';
+import { autoChoice, desktopOption, discoverWallets, DESKTOP_OPTION_ID, type Substrate, type WalletOption } from './wallets.js';
 
 /** The wallet type every bWalletX (extension, in-app, app frame, phone) reports. */
 export const BWALLETX_TYPE = 'bwalletx';
@@ -70,7 +72,7 @@ export function chooserOrder(list: readonly WalletOption[]): WalletOption[] {
  * 'bwalletx-phone': picker off and no bWalletX here, so the phone; 'legacy': fastPath false (0.5.5 autoChoice);
  * 'chooser': show the chooser; 'none': nothing to offer.
  */
-export type ChoiceReason = 'requested' | 'bwalletx' | 'bwalletx-phone' | 'legacy' | 'chooser' | 'none';
+export type ChoiceReason = 'requested' | 'remembered' | 'bwalletx' | 'bwalletx-phone' | 'legacy' | 'chooser' | 'none';
 
 export interface WalletChoice {
   option: WalletOption | null;
@@ -86,6 +88,10 @@ export interface DecideWalletOptions {
   picker?: boolean;
   /** The bWalletX-first rule. Default true; false restores the 0.5.5 behaviour (autoChoice). */
   fastPath?: boolean;
+  /** (0.6.0) The wallet the user picked on this origin before (rememberedWalletChoice()). Used when it is here. */
+  remembered?: RememberedWallet | null;
+  /** (0.6.0) "Switch" to bWalletX: ignore a remembered other wallet. */
+  preferBwalletX?: boolean;
 }
 
 /** The wallet to connect now, or the chooser ({ option: null, reason: 'chooser' }). */
@@ -98,6 +104,10 @@ export function decideWallet(list: readonly WalletOption[], o: DecideWalletOptio
   if (o.fastPath === false) {
     const a = autoChoice([...list], o.picker === false);
     return a === undefined ? { option: null, reason: 'chooser' } : a === null ? { option: null, reason: 'none' } : { option: a, reason: 'legacy' };
+  }
+  if (o.remembered && !o.preferBwalletX) {
+    const m = matchRemembered(list, o.remembered);
+    if (m) return { option: m, reason: 'remembered' };
   }
   const b = list.find(isPresentBwalletX);
   if (b) return { option: b, reason: 'bwalletx' };
@@ -152,4 +162,126 @@ export function reportAttempt(hook: AttemptHook | undefined, a: ConnectAttempt):
   } catch {
     /* metrics must never break sign-in */
   }
+}
+
+/* ---------------------------------------------------------------------------------------------------------------
+ * 0.6.0: the remembered choice and auto-connect.
+ * ------------------------------------------------------------------------------------------------------------- */
+
+/** localStorage key (per origin, like all localStorage) for the wallet type picked here. Never holds a key. */
+export const WALLET_CHOICE_KEY = 'bwx:wallet';
+
+/** What is remembered: the wallet type and how it reached the page. Nothing that identifies the user. */
+export interface RememberedWallet {
+  type: string;
+  substrate: Substrate;
+}
+
+const SUBSTRATES: readonly Substrate[] = ['extension', 'in-app', 'xdm', 'injected', 'window.CWI', 'json-api', 'cicada', 'pairing', 'adapter'];
+const TYPE_RE = /^[A-Za-z0-9._:-]{1,64}$/;
+const KEY_LIKE = /^(0[23][0-9a-f]{64}|04[0-9a-f]{128}|[13][1-9A-HJ-NP-Za-km-z]{25,34})$/i;
+
+/**
+ * True when the same wallet can be found again next time: bWalletX, an announced wallet (by its rdns), a desktop
+ * wallet, an app adapter. A bare window.CWI cannot (whoever holds it next time may be another wallet), so it is
+ * never remembered.
+ */
+export function isRememberable(o: WalletOption): boolean {
+  const t = walletTypeOf(o);
+  return substrateOf(o) !== 'window.CWI' && TYPE_RE.test(t) && !KEY_LIKE.test(t);
+}
+
+/** Whether a successful connect counts as the user's explicit pick: bWalletX (they tapped its button), or chosen. */
+export function isExplicitPick(o: WalletOption, reason: ChoiceReason): boolean {
+  return o.isBwalletX || reason === 'chooser' || reason === 'requested' || reason === 'remembered';
+}
+
+/** Remember the wallet type picked on this origin (or forget with null). Silently skips what can't be remembered. */
+export function rememberWalletChoice(o: WalletOption | null): void {
+  try {
+    if (!o) return void globalThis.localStorage?.removeItem(WALLET_CHOICE_KEY);
+    if (!isRememberable(o)) return;
+    const v: RememberedWallet & { v: 1 } = { type: walletTypeOf(o), substrate: substrateOf(o), v: 1 };
+    globalThis.localStorage?.setItem(WALLET_CHOICE_KEY, JSON.stringify(v));
+  } catch {
+    /* storage blocked */
+  }
+}
+
+/** The wallet type picked on this origin before, or null. Anything malformed or key-like is ignored. */
+export function rememberedWalletChoice(): RememberedWallet | null {
+  try {
+    const raw = globalThis.localStorage?.getItem(WALLET_CHOICE_KEY);
+    if (!raw) return null;
+    const j = JSON.parse(raw) as Partial<RememberedWallet>;
+    if (typeof j.type !== 'string' || !TYPE_RE.test(j.type) || KEY_LIKE.test(j.type)) return null;
+    if (!SUBSTRATES.includes(j.substrate as Substrate) || j.substrate === 'window.CWI') return null;
+    return { type: j.type, substrate: j.substrate as Substrate };
+  } catch {
+    return null;
+  }
+}
+
+/** Forget the remembered wallet (Disconnect does this). */
+export function forgetWalletChoice(): void {
+  rememberWalletChoice(null);
+}
+
+/** True when this wallet type is not bWalletX: show "Some features need bWalletX · Switch". */
+export function needsBwalletX(type: string | null | undefined): boolean {
+  return !!type && type !== BWALLETX_TYPE;
+}
+
+/**
+ * The option in `list` for a remembered wallet, or null when it isn't here. bWalletX counts only by its own marker
+ * (or the phone, when the phone was picked). A remembered desktop wallet gives desktopOption(): it looks on localhost
+ * only when connected, i.e. after the tap.
+ */
+export function matchRemembered(list: readonly WalletOption[], r: RememberedWallet): WalletOption | null {
+  if (r.type === BWALLETX_TYPE) {
+    return (r.substrate === 'pairing' ? list.find((o) => o.kind === 'pairing') : list.find(isPresentBwalletX)) ?? null;
+  }
+  const m = list.find((o) => !o.isBwalletX && isRememberable(o) && walletTypeOf(o) === r.type);
+  if (m) return m;
+  if (r.type === DESKTOP_OPTION_ID || r.substrate === 'json-api' || r.substrate === 'cicada') {
+    return list.find((o) => o.substrate === 'json-api' || o.substrate === 'cicada') ?? desktopOption();
+  }
+  return null;
+}
+
+/**
+ * What to do on page load for a returning visitor (0.6.0).
+ *   'attach'       signed in already (a server session) and the remembered wallet is in the page: pick it up by
+ *                  discovery alone (no wallet call, so no prompt) so pay/tip work without another tap;
+ *   'wait-for-tap' anything else a wallet would have to answer (a key, a signature, a localhost probe, a relay
+ *                  reconnect): nothing fires; the next tap goes straight to the remembered wallet;
+ *   'none'         nothing remembered, or auto-connect off.
+ */
+export type AutoConnectAction = 'attach' | 'wait-for-tap' | 'none';
+
+export interface AutoConnectPlan {
+  action: AutoConnectAction;
+  remembered: RememberedWallet | null;
+  /** The remembered wallet isn't bWalletX: show "Some features need bWalletX · Switch". */
+  needsBwalletX: boolean;
+}
+
+const ATTACHABLE: readonly Substrate[] = ['extension', 'in-app', 'xdm', 'injected'];
+
+export function planAutoConnect(o: { remembered: RememberedWallet | null; signedIn: boolean; enabled?: boolean }): AutoConnectPlan {
+  const r = o.remembered;
+  if (!r || o.enabled === false) return { action: 'none', remembered: r, needsBwalletX: false };
+  const action: AutoConnectAction = o.signedIn && ATTACHABLE.includes(r.substrate) ? 'attach' : 'wait-for-tap';
+  return { action, remembered: r, needsBwalletX: needsBwalletX(r.type) };
+}
+
+/**
+ * Find the remembered wallet in the page by discovery alone: no wallet method is called, nothing touches localhost,
+ * no relay is opened. null when it isn't here (or it isn't something that can be attached silently).
+ */
+export async function attachRemembered(r: RememberedWallet, o: { ms?: number } = {}): Promise<WalletOption | null> {
+  if (!ATTACHABLE.includes(r.substrate)) return null;
+  const list = await discoverWallets({ ms: o.ms });
+  const m = matchRemembered(list, r);
+  return m && m.kind === 'brc100' && m.wallet && ATTACHABLE.includes(substrateOf(m)) ? m : null;
 }

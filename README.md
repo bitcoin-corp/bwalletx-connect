@@ -181,6 +181,10 @@ const chosen = option ?? (reason === 'chooser' ? await chooseWallet(list) : null
 
 `BwalletXProvider fastPath={false}` (or `runConnect({ fastPath: false })`) restores the 0.5.5 picker rule. `connect({ chooser: true })` is the "Other wallets" link. `<bwalletx-signin other-wallets="auto|on|off">` controls the link (auto: shown at lg/md when the element signs in).
 
+### Returning visitors (0.6.0)
+
+After a sign-in the user explicitly picked, the wallet **type** is remembered for the origin (`localStorage['bwx:wallet']`, e.g. `{ "type": "io.yours", "substrate": "injected" }`; never a key). The next tap goes straight to that wallet, with no chooser. On load nothing that could prompt fires: with a live session the provider picks the remembered wallet up by discovery alone, so `pay`/`tip` work after a reload; without one, the next tap connects. If the remembered wallet isn't bWalletX, the element shows **Some features need bWalletX · Switch** (and "Switch to bWalletX" in its menu); `useBwalletX()` exposes `needsBwalletX` and `switchToBwalletX()` for your own UI. Disconnect forgets the choice. Turn it off with `rememberChoice={false}` / `autoConnect={false}` on the provider or `remember="off"` on the element.
+
 **Telemetry.** `onAttempt` (provider prop, `runConnect` option) and the element's `bwalletx-attempt` event report one record per attempt: `{ walletType, substrate, outcome, ms }`. `walletType` is `'bwalletx'` or the other wallet's rdns / option id; `substrate` is how it reached the page (`extension`, `in-app`, `xdm`, `injected`, `window.CWI`, `json-api`, `cicada`, `pairing`, `adapter`); `outcome` is `signed-in`, `connected`, `cancelled`, `rejected`, `not-found` or `error`. No keys, addresses or identity data.
 
 ## Migrating from HandCash Connect

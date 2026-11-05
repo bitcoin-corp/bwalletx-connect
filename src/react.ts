@@ -24,7 +24,10 @@ import { clearPairing } from './pair.js';
 import { declareWalletTheme } from './theme.js';
 import { runConnect } from './connect-flow.js';
 import { chooseWallet, pairingModal, pickWallet } from './modal.js';
-import type { AttemptHook } from './choice.js';
+import {
+  attachRemembered, forgetWalletChoice, needsBwalletX, planAutoConnect, rememberedWalletChoice, walletTypeOf,
+  type AttemptHook, type RememberedWallet,
+} from './choice.js';
 import { discoverWallets, type ConnectedWallet, type WalletOption } from './wallets.js';
 import { accountLabel, avatarUrlFor, lookupPaymail, signInErrorText } from './account.js';
 import { PaymentError, buyToken, pay, tip, type BuyTokenRequest, type PayOptions, type PayRequest, type PayResult } from './pay.js';
@@ -118,7 +121,7 @@ export function BwalletxSignin(props: BwalletxSigninProps): ReactElement {
           if (!e.defaultPrevented && c && cb.current.stateful !== false) {
             e.preventDefault();
             const mode = (e as CustomEvent<{ mode?: SigninMode }>).detail?.mode;
-            c.connect(mode === 'chooser' ? { chooser: true } : {}).catch(() => undefined);
+            c.connect(mode === 'chooser' ? { chooser: true } : mode === 'bwalletx' ? { bwalletx: true } : {}).catch(() => undefined);
           }
         },
       ],
@@ -178,6 +181,7 @@ export function BwalletxSignin(props: BwalletxSigninProps): ReactElement {
     scope: p.scope,
     'discover-ms': p.discoverMs,
     'other-wallets': p.otherWallets,
+    'wallet-type': driven ? (ctx.walletType ?? ctx.rememberedWallet?.type ?? undefined) : undefined,
     'aria-label': p['aria-label'],
   });
 }
@@ -197,6 +201,10 @@ export interface BwalletXState {
   walletId: string | null;
   /** 'bwalletx' for any bWalletX, else the wallet's rdns / option id (0.5.6). null until connect(). */
   walletType: string | null;
+  /** (0.6.0) The wallet type picked on this origin before (no keys), or null. Read after mount. */
+  rememberedWallet: RememberedWallet | null;
+  /** (0.6.0) The connected (or remembered) wallet isn't bWalletX: show "Some features need bWalletX · Switch". */
+  needsBwalletX: boolean;
   /** True while the transitional HandCash adapter is in use. */
   transitional: boolean;
   /** The server session (verifyUrl/sessionUrl) is in place. */
@@ -210,7 +218,9 @@ export interface BwalletXContextValue extends BwalletXState {
    * without it the chooser opens with "Get bWalletX" first. `chooser: true` is the "Other wallets" link: the chooser
    * even when bWalletX is here.
    */
-  connect(opts?: { walletId?: string; chooser?: boolean }): Promise<ConnectedWallet | null>;
+  connect(opts?: { walletId?: string; chooser?: boolean; bwalletx?: boolean }): Promise<ConnectedWallet | null>;
+  /** (0.6.0) "Switch": sign in with bWalletX (straight to it when here, else the chooser with Get bWalletX first). */
+  switchToBwalletX(): Promise<ConnectedWallet | null>;
   disconnect(): Promise<void>;
   /** The wallets found on the last connect() (or listWallets()). */
   wallets: WalletOption[];
@@ -260,6 +270,17 @@ export interface BwalletXProviderProps {
   /** Called once per connect attempt with { walletType, substrate, outcome, ms }. No keys, addresses or identity data. */
   onAttempt?: AttemptHook;
   /**
+   * (0.6.0) Remember the wallet TYPE the user explicitly picked on this origin (localStorage `bwx:wallet`; never a key)
+   * and go straight to it on the next tap, with no chooser. Disconnect forgets it. Default true.
+   */
+  rememberChoice?: boolean;
+  /**
+   * (0.6.0) On load, for a returning visitor with a server session, pick up the remembered wallet by discovery alone
+   * (no wallet call, so no prompt; never a localhost probe) so pay/tip work without another tap. Without a session
+   * nothing fires on load: a connect would ask the wallet, so it waits for the tap. Default true.
+   */
+  autoConnect?: boolean;
+  /**
    * A theme the wallet already bundles (e.g. 'npgx') for bWalletX to wear while this site is connected and is the
    * active tab. Declared only while connecting or connected; withdrawn on disconnect. See declareWalletTheme.
    */
@@ -271,6 +292,7 @@ export interface BwalletXProviderProps {
 
 const empty: BwalletXState = {
   status: 'idle', identityKey: null, handle: null, paymail: null, wallet: null, walletId: null, walletType: null, transitional: false, signedIn: false, error: null,
+  rememberedWallet: null, needsBwalletX: false,
 };
 
 const Ctx = createContext<BwalletXContextValue | null>(null);
@@ -338,7 +360,7 @@ export function BwalletXProvider(p: BwalletXProviderProps): ReactElement {
   }, []);
 
   const connect = useCallback(
-    async (opts: { walletId?: string; chooser?: boolean } = {}) => {
+    async (opts: { walletId?: string; chooser?: boolean; bwalletx?: boolean } = {}) => {
       const c = props.current;
       setState((s) => ({ ...s, status: 'connecting', error: null }));
       try {
@@ -352,6 +374,9 @@ export function BwalletXProvider(p: BwalletXProviderProps): ReactElement {
           fastPath: fast,
           pick: fast ? (l) => chooseWallet(l) : pickWallet,
           onAttempt: c.onAttempt,
+          remembered: fast && c.rememberChoice !== false ? rememberedWalletChoice() : null,
+          remember: fast && c.rememberChoice !== false,
+          preferBwalletX: opts.bwalletx,
           challengeUrl: c.challengeUrl,
           verifyUrl: c.verifyUrl,
           challengeNeedsIdentityKey: c.challengeNeedsIdentityKey,
@@ -374,6 +399,8 @@ export function BwalletXProvider(p: BwalletXProviderProps): ReactElement {
           transitional: !!cw.transitional,
           signedIn: r.signedIn,
           error: null,
+          rememberedWallet: c.rememberChoice !== false ? rememberedWalletChoice() : null,
+          needsBwalletX: needsBwalletX(r.walletType),
         });
         return { ...cw, identityKey: r.identityKey, handle: r.handle ?? undefined, paymail: r.paymail ?? undefined };
       } catch (e) {
@@ -391,9 +418,43 @@ export function BwalletXProvider(p: BwalletXProviderProps): ReactElement {
     const c = props.current;
     if (c.logoutUrl) await postJson(c.logoutUrl, {}).catch(() => {});
     if (state.walletId === 'bwalletx-pairing') await clearPairing();
+    // A Disconnect means "don't connect me automatically": the remembered wallet goes too.
+    if (c.rememberChoice !== false) forgetWalletChoice();
     payer.current = null;
     setState(empty);
   }, [state.walletId]);
+
+  const switchToBwalletX = useCallback(() => connect({ bwalletx: true }), [connect]);
+
+  // 0.6.0: the remembered wallet, read after mount (SSR-safe), for the "Switch" note.
+  useEffect(() => {
+    if (p.rememberChoice === false) return;
+    const r = rememberedWalletChoice();
+    if (r) setState((s) => (s.rememberedWallet ? s : { ...s, rememberedWallet: r, needsBwalletX: s.walletType ? s.needsBwalletX : needsBwalletX(r.type) }));
+  }, [p.rememberChoice]);
+
+  // 0.6.0 auto-connect: signed in from the session cookie, wallet not attached yet → pick up the remembered wallet by
+  // discovery alone (no wallet call, no prompt, no localhost). Anything that would ask the wallet waits for a tap.
+  const sessionOnly = state.status === 'connected' && state.signedIn && !state.wallet;
+  useEffect(() => {
+    const c = props.current;
+    if (!sessionOnly || c.autoConnect === false || c.rememberChoice === false || c.fastPath === false) return;
+    const plan = planAutoConnect({ remembered: rememberedWalletChoice(), signedIn: true });
+    if (plan.action !== 'attach' || !plan.remembered) return;
+    let live = true;
+    void attachRemembered(plan.remembered, { ms: c.discoverMs }).then((opt) => {
+      if (!live || !opt?.wallet) return;
+      payer.current = opt.wallet;
+      setState((s) =>
+        s.status === 'connected' && !s.wallet
+          ? { ...s, wallet: opt.wallet!, walletId: opt.id, walletType: walletTypeOf(opt), needsBwalletX: needsBwalletX(walletTypeOf(opt)) }
+          : s,
+      );
+    });
+    return () => {
+      live = false;
+    };
+  }, [sessionOnly]);
 
   // Best-effort paymail for the badge when the server did not send one (pay.bwallet.space lookup by key).
   useEffect(() => {
@@ -419,12 +480,13 @@ export function BwalletXProvider(p: BwalletXProviderProps): ReactElement {
       wallets,
       connect,
       disconnect,
+      switchToBwalletX,
       listWallets,
       pay: (req) => pay(need(), req, props.current.payOptions),
       tip: (req) => tip(need(), req, props.current.payOptions),
       buyToken: (req) => buyToken(need(), req),
     }),
-    [state, wallets, connect, disconnect, listWallets],
+    [state, wallets, connect, disconnect, switchToBwalletX, listWallets],
   );
 
   return createElement(Ctx.Provider, { value }, p.children);

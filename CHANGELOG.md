@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.0 (unreleased)
+
+Auto-connect for returning visitors (RB, 5 Nov 2026: "go on auto-connect"), within the wallet-choice rules of 0.5.6.
+
+- **The remembered choice.** After a sign-in the user explicitly picked (bWalletX's own button, a pick in the chooser, a site's `walletId`), the wallet TYPE is remembered for this origin: `localStorage['bwx:wallet'] = { type, substrate }`, e.g. `{ "type": "bwalletx", "substrate": "extension" }` or `{ "type": "io.yours", "substrate": "injected" }`. Never a key, address or handle; a bare `window.CWI` is never remembered (whoever holds it next time may be another wallet). `rememberWalletChoice`, `rememberedWalletChoice`, `forgetWalletChoice`.
+- **The next tap goes straight to it**, with no chooser, even when it isn't bWalletX (the user chose it). If it isn't here any more: bWalletX if here, else the chooser. A remembered desktop wallet probes localhost only after the tap.
+- **Nothing that could prompt fires on load.** `planAutoConnect()`: with a live server session and a remembered injected wallet, the provider picks the wallet up by discovery alone (`attachRemembered`: no wallet call, no localhost, no relay), so `pay`/`tip` work after a reload without another tap. Without a session, a connect would ask the wallet for a key or a signature, so it waits for the tap.
+- **"Some features need bWalletX · Switch"** under `<bwalletx-signin>` (lg/md; `switch-note="on|off"`) when the remembered wallet isn't bWalletX, and "Switch to bWalletX" in the signed-in menu. `switchToBwalletX()` on the element and in `useBwalletX()`; the `bwalletx-signin` event carries `mode: 'bwalletx'`. `useBwalletX()` adds `rememberedWallet` and `needsBwalletX`.
+- **Disconnect forgets** the remembered wallet (the provider's `disconnect()` and the element's menu).
+- Options: `BwalletXProvider rememberChoice` and `autoConnect` (both default true; both off with `fastPath={false}`), `runConnect({ remembered, remember, preferBwalletX })`, `decideWallet({ remembered, preferBwalletX })`, `<bwalletx-signin remember="off">`.
+- The one-sheet sign-in is unchanged: the identity key and the signature still go to the wallet together.
+
 ## 0.5.6 (unreleased)
 
 Wallet choice (RB, 5 Nov 2026: bWalletX is the default on our sites; no other wallet may take the sign-in flow). A fix: sites showed their own chooser even when only bWalletX was present, so users never saw the wallet sheet, and a wallet that held `window.CWI` was treated as bWalletX.
