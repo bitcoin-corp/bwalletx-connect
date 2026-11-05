@@ -10,6 +10,7 @@ Auto-connect for returning visitors (RB, 5 Nov 2026: "go on auto-connect"), with
 - **"Some features need bWalletX · Switch"** under `<bwalletx-signin>` (lg/md; `switch-note="on|off"`) when the remembered wallet isn't bWalletX, and "Switch to bWalletX" in the signed-in menu. `switchToBwalletX()` on the element and in `useBwalletX()`; the `bwalletx-signin` event carries `mode: 'bwalletx'`. `useBwalletX()` adds `rememberedWallet` and `needsBwalletX`.
 - **Disconnect forgets** the remembered wallet (the provider's `disconnect()` and the element's menu).
 - Options: `BwalletXProvider rememberChoice` and `autoConnect` (both default true; both off with `fastPath={false}`), `runConnect({ remembered, remember, preferBwalletX })`, `decideWallet({ remembered, preferBwalletX })`, `<bwalletx-signin remember="off">`.
+- `<bwalletx-button>` shares the record: a 0.5.5 `bwx:connected` entry (which held the identity key) becomes `{ type: 'bwalletx' }` on load and the key is deleted (`migrateConnectedKey`); a tap on Connect remembers the type; Disconnect forgets it. Still zero wallet calls on load.
 - The one-sheet sign-in is unchanged: the identity key and the signature still go to the wallet together.
 
 ## 0.5.6 (unreleased)

@@ -16,7 +16,8 @@
  * ON LOAD: discovery only (0.5.6). No wallet call, so no key leaves the wallet and no wallet shows a prompt without a
  * tap. A reload shows Connect again unless `session-url` reports a live session from your server (no wallet call);
  * one tap reconnects (bWalletX answers an approved site without a sheet). Nothing is stored: the old `bwx:connected`
- * entry held the identity key and is deleted on load.
+ * entry held the identity key and is deleted on load. 0.6.0 keeps the wallet TYPE instead (`bwx:wallet`, shared with
+ * <bwalletx-signin>): a 0.5.5 entry becomes { type: 'bwalletx' } and its key is deleted; Disconnect forgets it.
  *
  * Attributes: size (sm | md | lg, default sm), get-url (overrides the platform link), discover-ms (default 800),
  * lookup-url (handle lookup, default pay.bwallet.space; "off" to skip), session-url (GET → { identityKey, paymail? }
@@ -28,10 +29,26 @@ import { clearPairing } from './pair.js';
 import { connectBwalletX } from './signin.js';
 import { pairingModal } from './modal.js';
 import { markSvg, SIGNIN_CSS } from './element.js';
+import { BWALLETX_TYPE, forgetWalletChoice, rememberWalletChoice, rememberedWalletChoice } from './choice.js';
+import type { Substrate } from './wallets.js';
 
 export const BUTTON_TAG = 'bwalletx-button';
 /** Legacy (0.5.5) localStorage key that held the identity key. Deleted on load since 0.5.6; never written. */
 export const CONNECTED_KEY = 'bwx:connected';
+
+/**
+ * (0.6.0) Migrate the 0.5.5 `bwx:connected` entry to the type-only record: the user had connected bWalletX here, so
+ * remember { type: 'bwalletx' } (unless a choice is already remembered) and delete the key. True when one was there.
+ */
+export function migrateConnectedKey(): boolean {
+  const had = dropLegacyConnectedKey();
+  if (had && !rememberedWalletChoice()) rememberBwalletX('extension');
+  return had;
+}
+
+function rememberBwalletX(substrate: Substrate) {
+  rememberWalletChoice({ id: 'bwalletx', name: 'bWalletX', kind: substrate === 'pairing' ? 'pairing' : 'brc100', isBwalletX: true, substrate, connect: async () => { throw new Error('unused'); } });
+}
 
 /** Delete the 0.5.5 `bwx:connected` entry (it held the identity key). True when one was there. */
 export function dropLegacyConnectedKey(): boolean {
@@ -113,7 +130,7 @@ function createClass(): CustomElementConstructor {
       }
       live.add(this);
       this.#hideLegacy();
-      dropLegacyConnectedKey();
+      migrateConnectedKey();
       const phone = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
       this.#set(stateFor({ connected: false, found: null, phone }));
       const ms = Number(this.getAttribute('discover-ms')) || 800;
@@ -171,8 +188,10 @@ function createClass(): CustomElementConstructor {
       const modal = pairingModal({ title: 'Connect bWalletX' });
       this.#set('connecting');
       try {
-        const { wallet } = await connectBwalletX({ pairing: modal });
+        const { wallet, method } = await connectBwalletX({ pairing: modal });
         const { publicKey } = await wallet.getPublicKey({ identityKey: true });
+        // The user tapped Connect bWalletX: remember the TYPE for this origin (never the key).
+        rememberBwalletX(method === 'pairing' ? 'pairing' : method === 'in-app' ? 'in-app' : 'extension');
         this.#connected(publicKey);
       } catch (e) {
         if ((e as { code?: string })?.code === 'NOT_FOUND') this.#set('none');
@@ -186,6 +205,7 @@ function createClass(): CustomElementConstructor {
       try { clearPairing(); } catch { /* none */ }
       try { window.postMessage({ type: 'bwallet:disconnect' }, location.origin); } catch { /* no window */ }
       this.#key = null; this.#paymail = null; dropLegacyConnectedKey();
+      if (rememberedWalletChoice()?.type === BWALLETX_TYPE) forgetWalletChoice();
       this.#set('available');
       this.#emit('bwalletx-disconnected');
     }

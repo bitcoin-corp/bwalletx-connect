@@ -10,7 +10,7 @@ export { inOrder } from './in-order.js';
 export { defineBwalletxSignin, buildAuthorizeUrl, signinText, markSvg, SIGNIN_TAG, SIGNIN_CSS, MENU_CSS, PENDING_NOTE, PENDING_LABEL, PENDING_LABEL_OTHER, SWITCH_NOTE, CONTINUE_OTHER_LABEL, GET_URL, WEB_WALLET_URL } from './element.js';
 export type { SigninSize, SigninTheme, SigninLabel, SigninBrand, SigninState, SigninAccount, SigninMode, AuthorizeParams } from './element.js';
 export { accountLabel, avatarUrlFor, lookupPaymail, shortKey, isUserRejection, signInErrorText, rememberedIdentity, rememberIdentity, IDENTITY_HINT_KEY, PAYMAIL_LOOKUP_URL, BAVATAR_URL } from './account.js';
-export { defineBwalletxButton, getUrlFor, stateFor, handleLabel, dropLegacyConnectedKey, BUTTON_TAG, CONNECTED_KEY } from './wallet-button.js';
+export { defineBwalletxButton, getUrlFor, stateFor, handleLabel, dropLegacyConnectedKey, migrateConnectedKey, BUTTON_TAG, CONNECTED_KEY } from './wallet-button.js';
 export type { ButtonState } from './wallet-button.js';
 export { pay, tip, buyToken, amountInSats, resolvePaymailP2P, PaymentError, BRC29_PROTOCOL, isPaymail, isIdentityKeyHex } from './pay.js';
 export type { PayRequest, PayResult, PayOptions, PayOutput, PaySource, LegacyPayer, Brc29Remittance, BuyTokenRequest, TokenQuote, PaymentErrorCode } from './pay.js';

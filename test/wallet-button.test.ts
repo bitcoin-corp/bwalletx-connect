@@ -85,6 +85,8 @@ describe('<bwalletx-button> on load: no wallet calls, no keys stored (0.5.6)', (
     await tick(120);
     expect(ext.calls).toEqual([]);
     expect(localStorage.getItem('bwx:connected')).toBeNull();
+    // 0.6.0: migrated to the type-only record; the key is gone.
+    expect(localStorage.getItem('bwx:wallet')).toBe(JSON.stringify({ type: 'bwalletx', substrate: 'extension', v: 1 }));
     expect(el.state).toBe('available');
     // The tap connects (one identity-key call), and still stores nothing.
     el.shadowRoot!.querySelector('button')!.click();
@@ -92,6 +94,9 @@ describe('<bwalletx-button> on load: no wallet calls, no keys stored (0.5.6)', (
     expect(ext.calls).toEqual(['getPublicKey']);
     expect(el.state).toBe('connected');
     expect(JSON.stringify({ ...localStorage })).not.toContain(KEY);
+    // Disconnect forgets the remembered type.
+    el.shadowRoot!.querySelector('button')!.click();
+    expect(localStorage.getItem('bwx:wallet')).toBeNull();
     ext.stop();
     vi.unstubAllGlobals();
   });
