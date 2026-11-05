@@ -27,6 +27,9 @@ a.bwx-btn{display:block;text-align:center;text-decoration:none;box-sizing:border
 .bwx-opt img{width:24px;height:24px;border-radius:6px}
 .bwx-tag{margin-left:auto;font-size:11px;color:#8d866f;white-space:nowrap}
 .bwx-opt{min-height:48px;box-sizing:border-box}
+a.bwx-btn.bwx-opt{display:flex;text-align:left}
+.bwx-btn:focus{outline:none}
+.bwx-btn:focus-visible{outline:2px solid #e8c766;outline-offset:2px}
 .bwx-mk{display:inline-flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;border-radius:50%;background:#000}
 .bwx-ico{display:inline-grid;place-items:center;flex:none;width:28px;height:28px;border-radius:8px;background:#2a2518;color:#e8c766;font-weight:700;font-size:13px}
 .bwx-opt img{width:28px;height:28px;border-radius:8px;flex:none}
