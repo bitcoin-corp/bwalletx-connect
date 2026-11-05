@@ -37,13 +37,24 @@ describe('signInWithBwalletX', () => {
     expect(await verify(r)).toBe(root.toPublicKey().toString());
   });
 
-  it('ignores other wallets and falls back to window.CWI as in-app', async () => {
-    const root = PrivateKey.fromRandom();
+  it('never takes another wallet or a bare window.CWI for bWalletX (0.5.6)', async () => {
     const w = new EventTarget() as EventTarget & { CWI?: unknown };
     w.addEventListener('brc100:requestWallet', () =>
       w.dispatchEvent(Object.assign(new Event('brc100:announceWallet'), { detail: { info: { rdns: 'com.example.other' }, wallet: wallet(PrivateKey.fromRandom()) } })),
     );
-    w.CWI = wallet(root);
+    w.CWI = wallet(PrivateKey.fromRandom());
+    g.window = w;
+    await expect(signInWithBwalletX({ challenge, discoverMs: 50, reusePairing: false })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  it('the in-app browser is found by its own announcement (space.bwallet.mobile)', async () => {
+    const root = PrivateKey.fromRandom();
+    const w = new EventTarget() as EventTarget & { CWI?: unknown };
+    const inApp = wallet(root);
+    w.addEventListener('brc100:requestWallet', () =>
+      w.dispatchEvent(Object.assign(new Event('brc100:announceWallet'), { detail: { info: { rdns: 'space.bwallet.mobile' }, wallet: inApp } })),
+    );
+    w.CWI = inApp;
     g.window = w;
     const r = await signInWithBwalletX({ challenge, discoverMs: 100 });
     expect(r.method).toBe('in-app');

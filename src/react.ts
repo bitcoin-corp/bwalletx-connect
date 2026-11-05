@@ -23,12 +23,12 @@ import type { WalletInterface } from '@bsv/sdk';
 import { clearPairing } from './pair.js';
 import { declareWalletTheme } from './theme.js';
 import { runConnect } from './connect-flow.js';
-import { pairingModal } from './modal.js';
-import { pickWallet } from './modal.js';
+import { chooseWallet, pairingModal, pickWallet } from './modal.js';
+import type { AttemptHook } from './choice.js';
 import { discoverWallets, type ConnectedWallet, type WalletOption } from './wallets.js';
 import { accountLabel, avatarUrlFor, lookupPaymail, signInErrorText } from './account.js';
 import { PaymentError, buyToken, pay, tip, type BuyTokenRequest, type PayOptions, type PayRequest, type PayResult } from './pay.js';
-import { defineBwalletxSignin, type SigninBrand, type SigninLabel, type SigninSize, type SigninState, type SigninTheme } from './element.js';
+import { defineBwalletxSignin, type SigninBrand, type SigninLabel, type SigninMode, type SigninSize, type SigninState, type SigninTheme } from './element.js';
 
 export interface SignedInDetail {
   identityKey: string;
@@ -58,6 +58,8 @@ export interface BwalletxSigninProps {
   redirectUri?: string;
   scope?: string;
   discoverMs?: number;
+  /** "Other wallets" link under the button: 'auto' (default: lg/md), 'on' or 'off'. */
+  otherWallets?: 'auto' | 'on' | 'off';
   /** Without a provider: GET → { identityKey, handle?, paymail? } restores the signed-in badge on load. */
   sessionUrl?: string;
   /** Without a provider: POST on Disconnect. */
@@ -111,10 +113,12 @@ export function BwalletxSignin(props: BwalletxSigninProps): ReactElement {
         (e) => {
           cb.current.onClick?.(e as CustomEvent<{ element: HTMLElement }>);
           // Inside a provider the click is the provider's connect(): one wallet sheet, and this button follows it.
+          // "Other wallets" arrives here too, as mode 'chooser'.
           const c = ctxRef.current;
           if (!e.defaultPrevented && c && cb.current.stateful !== false) {
             e.preventDefault();
-            c.connect().catch(() => undefined);
+            const mode = (e as CustomEvent<{ mode?: SigninMode }>).detail?.mode;
+            c.connect(mode === 'chooser' ? { chooser: true } : {}).catch(() => undefined);
           }
         },
       ],
@@ -173,6 +177,7 @@ export function BwalletxSignin(props: BwalletxSigninProps): ReactElement {
     'redirect-uri': p.redirectUri,
     scope: p.scope,
     'discover-ms': p.discoverMs,
+    'other-wallets': p.otherWallets,
     'aria-label': p['aria-label'],
   });
 }
@@ -190,6 +195,8 @@ export interface BwalletXState {
   wallet: WalletInterface | null;
   /** Which option connected (e.g. 'com.bwalletx.extension', 'bwalletx-pairing', 'handcash'). */
   walletId: string | null;
+  /** 'bwalletx' for any bWalletX, else the wallet's rdns / option id (0.5.6). null until connect(). */
+  walletType: string | null;
   /** True while the transitional HandCash adapter is in use. */
   transitional: boolean;
   /** The server session (verifyUrl/sessionUrl) is in place. */
@@ -198,8 +205,12 @@ export interface BwalletXState {
 }
 
 export interface BwalletXContextValue extends BwalletXState {
-  /** Find wallets, show the picker if there is a choice, connect, and sign in if verifyUrl is set. */
-  connect(opts?: { walletId?: string }): Promise<ConnectedWallet | null>;
+  /**
+   * Find wallets, connect, and sign in if verifyUrl is set. bWalletX in this browser is used straight away (0.5.6);
+   * without it the chooser opens with "Get bWalletX" first. `chooser: true` is the "Other wallets" link: the chooser
+   * even when bWalletX is here.
+   */
+  connect(opts?: { walletId?: string; chooser?: boolean }): Promise<ConnectedWallet | null>;
   disconnect(): Promise<void>;
   /** The wallets found on the last connect() (or listWallets()). */
   wallets: WalletOption[];
@@ -235,8 +246,19 @@ export interface BwalletXProviderProps {
   lookupUrl?: string;
   /** Extra options, e.g. [handcashAdapter({ login })]. */
   extraWallets?: WalletOption[];
-  /** Probe desktop wallets on localhost. Default false. */
+  /**
+   * Probe desktop wallets on localhost while listing. Default false, and best left off (Chrome's Local Network Access
+   * prompt): the chooser offers "Desktop wallet", which probes only when tapped.
+   */
   probeLocal?: boolean;
+  /**
+   * bWalletX first (0.5.6, default true): with bWalletX in this browser connect() goes straight to its sheet, no
+   * chooser; without it the chooser opens, "Get bWalletX" first, and another wallet is connected only when picked.
+   * false: the 0.5.5 picker rule (one detected wallet of any brand was used without asking).
+   */
+  fastPath?: boolean;
+  /** Called once per connect attempt with { walletType, substrate, outcome, ms }. No keys, addresses or identity data. */
+  onAttempt?: AttemptHook;
   /**
    * A theme the wallet already bundles (e.g. 'npgx') for bWalletX to wear while this site is connected and is the
    * active tab. Declared only while connecting or connected; withdrawn on disconnect. See declareWalletTheme.
@@ -248,7 +270,7 @@ export interface BwalletXProviderProps {
 }
 
 const empty: BwalletXState = {
-  status: 'idle', identityKey: null, handle: null, paymail: null, wallet: null, walletId: null, transitional: false, signedIn: false, error: null,
+  status: 'idle', identityKey: null, handle: null, paymail: null, wallet: null, walletId: null, walletType: null, transitional: false, signedIn: false, error: null,
 };
 
 const Ctx = createContext<BwalletXContextValue | null>(null);
@@ -316,16 +338,20 @@ export function BwalletXProvider(p: BwalletXProviderProps): ReactElement {
   }, []);
 
   const connect = useCallback(
-    async (opts: { walletId?: string } = {}) => {
+    async (opts: { walletId?: string; chooser?: boolean } = {}) => {
       const c = props.current;
       setState((s) => ({ ...s, status: 'connecting', error: null }));
       try {
         const list = await listWallets();
+        const fast = c.fastPath !== false;
         const r = await runConnect({
           list,
           walletId: opts.walletId,
+          chooser: opts.chooser,
           picker: c.picker,
-          pick: pickWallet,
+          fastPath: fast,
+          pick: fast ? (l) => chooseWallet(l) : pickWallet,
+          onAttempt: c.onAttempt,
           challengeUrl: c.challengeUrl,
           verifyUrl: c.verifyUrl,
           challengeNeedsIdentityKey: c.challengeNeedsIdentityKey,
@@ -344,6 +370,7 @@ export function BwalletXProvider(p: BwalletXProviderProps): ReactElement {
           paymail: r.paymail,
           wallet: cw.wallet,
           walletId: cw.optionId,
+          walletType: r.walletType,
           transitional: !!cw.transitional,
           signedIn: r.signedIn,
           error: null,

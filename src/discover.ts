@@ -15,17 +15,22 @@ export interface FoundWallet {
 }
 
 /**
- * Default wait for a wallet that has not answered yet, ms. bWalletX for Chrome answers `brc100:requestWallet`
- * synchronously and the in-app browser sets `window.CWI` before the page runs, so a found wallet resolves at once;
+ * Default wait for a wallet that has not answered yet, ms. bWalletX for Chrome and the in-app browser both answer
+ * `brc100:requestWallet` synchronously, so a found wallet resolves at once;
  * this is only how long "nothing here" takes before the pairing QR shows. Was 1200 (0.5.3 and earlier).
  */
 export const DEFAULT_DISCOVER_MS = 300;
 
 /**
  * Like findBwalletX, but also says which bWalletX answered.
- * Order: a BRC-100 announcement with a bWalletX rdns (answered at once by the extension); then `window.CWI` (set by
- * the in-app browser, and by older builds that do not announce), taken straight away; then, only when framed, the
- * parent's XDM answer (probed in parallel with the wait). Otherwise null after `ms`.
+ *
+ * bWalletX is recognised ONLY by its own markers: a BRC-100 announcement carrying a bWalletX rdns
+ * (`com.bwalletx.extension` from the Chrome extension, `space.bwallet.mobile` from the in-app browser; both answer
+ * `brc100:requestWallet` at once), or, only when framed, the XDM answer of a parent on BWALLETX_PARENT_ORIGINS.
+ *
+ * Never by `window.CWI` (0.5.6): another wallet (Metanet / BSV Desktop, Yours) can set or overwrite it, and treating
+ * whoever holds it as bWalletX handed our sign-in to that wallet. Every bWalletX build since 3 Oct 2026 announces.
+ * Resolves null after `ms` when no bWalletX announced (other wallets: discoverWallets).
  */
 export function discoverBwalletX(ms = DEFAULT_DISCOVER_MS): Promise<FoundWallet | null> {
   if (typeof window === 'undefined') return Promise.resolve(null);
@@ -46,14 +51,9 @@ export function discoverBwalletX(ms = DEFAULT_DISCOVER_MS): Promise<FoundWallet 
         finish({ wallet: d.wallet, method: rdns === RDNS_EXTENSION ? 'extension' : 'in-app', rdns });
       }
     };
-    const cwiNow = (): boolean => {
-      const cwi = (window as unknown as { CWI?: WalletInterface }).CWI;
-      if (cwi) finish({ wallet: cwi, method: 'in-app', rdns: null });
-      return !!cwi;
-    };
     window.addEventListener('brc100:announceWallet', onAnnounce);
     window.dispatchEvent(new Event('brc100:requestWallet'));
-    if (done || cwiNow()) return;
+    if (done) return;
     // Inside bWalletX's in-wallet frame nothing is injected into the page: the wallet answers BRC-100 XDM
     // (postMessage to the parent) instead. Only tried when framed, and only kept if the parent answers.
     // The parent may take a moment to answer, so it gets at least the old 1200 ms; unframed pages never wait on it.
@@ -61,9 +61,10 @@ export function discoverBwalletX(ms = DEFAULT_DISCOVER_MS): Promise<FoundWallet 
       void probeXdm(Math.max(ms, 1200)).then((w) => finish(w ? { wallet: w, method: 'in-app', rdns: null } : null));
       return;
     }
+    // A late announcement (an extension frame cleared after the page ran) still counts until the wait ends.
     timer = setTimeout(() => {
       timer = undefined;
-      if (!cwiNow()) finish(null);
+      finish(null);
     }, ms);
   });
 }
@@ -76,7 +77,8 @@ export async function findBwalletX(ms = DEFAULT_DISCOVER_MS): Promise<WalletInte
   return (await discoverBwalletX(ms))?.wallet ?? null;
 }
 
-const isFramed = (): boolean => {
+/** True inside a frame (or when the parent can't be read). */
+export const isFramed = (): boolean => {
   try {
     return window.parent !== window;
   } catch {

@@ -20,6 +20,9 @@
  *   get-url       where "Get bWalletX" points. Default https://bwalletx.com/get
  *   web-url       the web wallet. Default https://web.bwalletx.com
  *   discover-ms   how long to wait for a wallet that has not answered. Default 300
+ *   other-wallets auto (default) | on | off. A small "Other wallets" link under the button that opens the chooser
+ *                 (phone QR, other browser wallets, desktop wallets). auto: shown at lg/md when the element runs the
+ *                 sign-in (challenge-url) or follows a provider; always offered in the not-found row unless off
  *   session-url   GET → { identityKey, handle?, paymail? }: restores the signed-in badge on load, no wallet prompt
  *   logout-url    POST on Disconnect (clears the session cookie)
  *   lookup-url    paymail lookup by key for the badge. Default pay.bwallet.space; "off" to skip
@@ -30,9 +33,15 @@
  *   href          plain link mode: navigate here on click
  *   authorize-url (+ client-id, redirect-uri, scope)  OAuth mode, for auth.bwalletx.com once it exists
  *
+ * Wallet choice (0.5.6): bWalletX in this browser (its own announcement, never window.CWI) → straight to its sheet,
+ * no chooser. Other wallets here but no bWalletX → the chooser, "Get bWalletX" first; another wallet is used only
+ * when picked. Nothing here → the not-found row. Nothing probes localhost until "Desktop wallet" is tapped.
+ *
  * Events (bubble, composed):
- *   bwalletx-signin     on every click, before anything else. Cancelable: preventDefault() stops the
- *                       built-in behaviour so you can run your own flow.
+ *   bwalletx-signin     on every click, before anything else, detail { element, mode } (mode: 'signin', or
+ *                       'chooser' from "Other wallets"). Cancelable: preventDefault() stops the built-in behaviour so
+ *                       you can run your own flow.
+ *   bwalletx-attempt    once per attempt: { walletType, substrate, outcome, ms }. No keys or addresses.
  *   bwalletx-signed-in  detail { identityKey, method, nonce, signature, response }
  *   bwalletx-not-found  no bWalletX answered; the "Get bWalletX" row is shown
  *   bwalletx-error      detail { error }
@@ -44,7 +53,10 @@
  * plain line: what signing in shares) → signed in (a badge: bAvatar, $handle or short key, gold dot; its menu has
  * Copy paymail/key and Disconnect) or an error (one line plus Retry; a no in the wallet reads "Sign-in cancelled").
  */
-import { bindPrewarm, discoverBwalletX, DEFAULT_DISCOVER_MS } from './discover.js';
+import { bindPrewarm, discoverBwalletX, DEFAULT_DISCOVER_MS, RDNS_EXTENSION, RDNS_MOBILE } from './discover.js';
+import { brc100Option, discoverWallets, type WalletOption } from './wallets.js';
+import { attemptFor, hasBwalletX, otherDetected, outcomeOf, substrateOf, type AttemptOutcome } from './choice.js';
+import { chooseWallet, pairingModal } from './modal.js';
 import { signInAndVerify, type Challenge } from './signin.js';
 import { requestAccess, type AccessChallengeLike } from './access-client.js';
 import { AccessError } from './access.js';
@@ -122,6 +134,11 @@ button[aria-busy=true]{cursor:wait}
 /* pending: one plain line under the button */
 .note{margin:8px 0 0;width:0;min-width:100%;font-size:12px;line-height:1.4;color:#71717a;text-align:center;overflow-wrap:break-word}
 :host([theme=dark]) .note,:host-context(.dark) .note{color:#a1a1aa}
+/* "Other wallets" (0.5.6): one small link under the button */
+.ow{margin:8px 0 0;width:0;min-width:100%;font-size:12px;line-height:1.4;color:#71717a;text-align:center}
+:host([theme=dark]) .ow,:host-context(.dark) .ow{color:#a1a1aa}
+.lnk{all:unset;cursor:pointer;color:inherit;font-weight:600;text-decoration:underline;text-underline-offset:2px}
+.lnk:focus-visible{outline:2px solid #b45309;outline-offset:2px;border-radius:2px}
 /* error: one line plus Retry */
 .err{margin:0 0 8px;width:0;min-width:100%;font-size:13px;font-weight:600;line-height:1.4;color:#b91c1c;text-align:center;overflow-wrap:anywhere}
 :host([theme=dark]) .err,:host-context(.dark) .err{color:#fca5a5}
@@ -171,6 +188,11 @@ export interface SigninAccount {
 /** The one plain line shown while the wallet sheet is up. */
 export const PENDING_NOTE = 'Sign in: shares only your public identity key, moves no money';
 export const PENDING_LABEL = 'Approve in bWalletX…';
+/** The pending label when the user picked a wallet other than bWalletX. */
+export const PENDING_LABEL_OTHER = 'Approve in your wallet…';
+
+/** What started a sign-in: the button ('signin') or "Other wallets" ('chooser'). */
+export type SigninMode = 'signin' | 'chooser';
 
 /** Optional OAuth parameters for authorize-url mode. auth.bwalletx.com is planned, not live. */
 export interface AuthorizeParams { authorizeUrl: string; clientId?: string | null; redirectUri?: string | null; scope?: string | null }
@@ -219,7 +241,7 @@ async function postAccess(url: string, body: unknown): Promise<unknown> {
   return res.json().catch(() => ({ error: 'bad_request', message: `HTTP ${res.status}` }));
 }
 
-const OBSERVED = ['size', 'theme', 'label', 'brand', 'subtitle', 'loading', 'disabled', 'full-width', 'aria-label', 'get-url', 'web-url', 'state', 'identity-key', 'paymail', 'handle', 'avatar-url', 'error'];
+const OBSERVED = ['size', 'theme', 'label', 'brand', 'subtitle', 'loading', 'disabled', 'full-width', 'aria-label', 'get-url', 'web-url', 'state', 'identity-key', 'paymail', 'handle', 'avatar-url', 'error', 'other-wallets', 'challenge-url'];
 const STATES: readonly SigninState[] = ['signed-out', 'restoring', 'pending', 'signed-in', 'error'];
 
 /** The element class. Created lazily so importing this module on a server is harmless. */
@@ -233,6 +255,7 @@ function createClass(): CustomElementConstructor {
     #account: SigninAccount | null = null;
     #error = '';
     #restored = false;
+    #pendingLabel = PENDING_LABEL;
     #menu: { host: HTMLElement; close: (focusChip?: boolean) => void } | null = null;
 
     constructor() {
@@ -338,7 +361,8 @@ function createClass(): CustomElementConstructor {
       const pending = state === 'pending';
       const restoring = state === 'restoring';
       const error = state === 'error';
-      const text = pending ? PENDING_LABEL : error ? 'Retry' : signinText((this.#attr('label') ?? 'signin') as SigninLabel, brand);
+      const pendingLabel = this.#controlled ? PENDING_LABEL : this.#pendingLabel;
+      const text = pending ? pendingLabel : error ? 'Retry' : signinText((this.#attr('label') ?? 'signin') as SigninLabel, brand);
       const subAttr = this.#attr('subtitle');
       const subDefault = brand === 'bWalletX' && (size === 'lg' || size === 'md') ? 'also works with bWallet' : null;
       const subtitle = pending || error ? null : subAttr === null || subAttr === '' || subAttr === 'on' ? (subAttr === 'on' ? 'also works with bWallet' : subDefault)
@@ -346,22 +370,26 @@ function createClass(): CustomElementConstructor {
       const loading = this.hasAttribute('loading') || this.#busy || pending || restoring;
       const disabled = this.hasAttribute('disabled');
       const markPx = size === 'icon' ? 24 : size === 'sm' ? 15 : size === 'md' ? 17 : 20;
-      const aria = pending ? PENDING_LABEL : this.#attr('aria-label') ?? (subtitle && size !== 'icon' ? `${text}, ${subtitle}` : text);
+      const aria = pending ? pendingLabel : this.#attr('aria-label') ?? (subtitle && size !== 'icon' ? `${text}, ${subtitle}` : text);
       const getUrl = this.#attr('get-url') ?? GET_URL;
       const webUrl = this.#attr('web-url') ?? WEB_WALLET_URL;
       const errText = error ? (this.#controlled ? this.#attr('error') : this.#error) || 'Sign-in failed' : '';
 
       const label = size === 'icon' ? '' : `<span class="txt" part="text"><b part="label">${esc(text)}</b>${subtitle ? `<small part="subtitle">${esc(subtitle)}</small>` : ''}</span>`;
       const mark = loading ? '<span class="spin" aria-hidden="true"></span>' : markSvg(markPx);
+      const otherOff = this.#attr('other-wallets') === 'off';
+      const otherLink = '<button type="button" class="lnk" data-act="other" part="other-wallets-link">Other wallets</button>';
       const nf = this.#notFound
-        ? `<p class="nf" part="not-found" role="status">bWalletX wasn't found in this browser. <a href="${esc(getUrl)}" target="_blank" rel="noopener">Get ${brand}</a> or <a href="${esc(webUrl)}" target="_blank" rel="noopener">use the web wallet</a>.</p>`
+        ? `<p class="nf" part="not-found" role="status">bWalletX wasn't found in this browser. <a href="${esc(getUrl)}" target="_blank" rel="noopener">Get ${brand}</a> or <a href="${esc(webUrl)}" target="_blank" rel="noopener">use the web wallet</a>.${otherOff ? '' : ` ${otherLink}`}</p>`
         : '';
+      const ow = !this.#notFound && !pending && !restoring && this.#otherWalletsShown(size) ? `<p class="ow" part="other-wallets">${otherLink}</p>` : '';
       const err = error ? `<p class="err" part="error" role="alert">${esc(errText)}</p>` : '';
       const compact = size === 'sm' || size === 'icon';
       const note = pending && !compact ? `<p class="note" part="note">${esc(PENDING_NOTE)}</p>` : '';
-      const status = pending ? `<span class="sr" role="status">${esc(PENDING_LABEL)}</span>` : loading ? '<span class="sr" role="status">Connecting to bWalletX…</span>' : '';
-      this.#root.innerHTML = `<style>${SIGNIN_CSS}</style>${err}<button type="button" part="button" aria-label="${esc(aria)}" title="${esc(subtitle ? `${text} (${subtitle})` : text)}"${disabled ? ' disabled' : ''}${loading ? ' aria-busy="true"' : ''}><span class="mark" part="mark">${mark}</span>${label}</button>${status}${note}${nf}`;
+      const status = pending ? `<span class="sr" role="status">${esc(pendingLabel)}</span>` : loading ? '<span class="sr" role="status">Connecting to bWalletX…</span>' : '';
+      this.#root.innerHTML = `<style>${SIGNIN_CSS}</style>${err}<button type="button" part="button" aria-label="${esc(aria)}" title="${esc(subtitle ? `${text} (${subtitle})` : text)}"${disabled ? ' disabled' : ''}${loading ? ' aria-busy="true"' : ''}><span class="mark" part="mark">${mark}</span>${label}</button>${status}${note}${ow}${nf}`;
       this.button!.addEventListener('click', () => void this.#click());
+      for (const l of Array.from(this.#root.querySelectorAll<HTMLElement>('[data-act=other]'))) l.addEventListener('click', () => void this.otherWallets());
       bindPrewarm(this.button!);
       // A nav-sized button has no room for the line: it shows in a body-level tip under the button instead, so an
       // overflow:hidden header can't clip it and the header doesn't grow.
@@ -510,36 +538,96 @@ function createClass(): CustomElementConstructor {
       return this.dispatchEvent(new CustomEvent(type, { detail, bubbles: true, composed: true, cancelable }));
     }
 
-    async #click() {
-      if (this.hasAttribute('disabled') || this.hasAttribute('loading') || this.#busy || this.state === 'pending') return;
-      if (!this.#emit('bwalletx-signin', { element: this }, true)) return;
+    /** "Other wallets" is offered under the button: other-wallets on, or auto at lg/md when this element signs in. */
+    #otherWalletsShown(size: SigninSize): boolean {
+      const a = this.#attr('other-wallets');
+      if (a === 'off') return false;
+      if (a === 'on') return true;
+      return (size === 'lg' || size === 'md') && (this.#controlled || !!this.#attr('challenge-url'));
+    }
 
-      const href = this.#attr('href');
-      const authorizeUrl = this.#attr('authorize-url');
-      if (authorizeUrl) {
-        location.assign(await buildAuthorizeUrl({ authorizeUrl, clientId: this.#attr('client-id'), redirectUri: this.#attr('redirect-uri'), scope: this.#attr('scope') }));
-        return;
+    /** Open the wallet chooser (the "Other wallets" link): phone QR, other browser wallets, desktop wallets. */
+    otherWallets(): Promise<void> {
+      return this.#click('chooser');
+    }
+
+    #attempt(option: WalletOption | null, outcome: AttemptOutcome, started: number) {
+      this.#emit('bwalletx-attempt', attemptFor(option, outcome, started));
+    }
+
+    /**
+     * Which wallet: bWalletX by its own marker goes straight to its sheet; otherwise the chooser ("Get bWalletX" first)
+     * when another wallet is here or the user asked; otherwise 'not-found'. null: the chooser was closed.
+     */
+    async #choose(mode: SigninMode, ms: number, pairing: ReturnType<typeof pairingModal>): Promise<WalletOption | 'not-found' | null> {
+      if (mode !== 'chooser') {
+        const f = await discoverBwalletX(ms);
+        if (f) {
+          const substrate = f.rdns === RDNS_EXTENSION ? 'extension' : f.rdns === RDNS_MOBILE ? 'in-app' : 'xdm';
+          return brc100Option(f.wallet, { id: f.rdns ?? 'bwalletx-xdm', rdns: f.rdns ?? undefined, name: 'bWalletX', isBwalletX: true, substrate });
+        }
       }
-      if (href) { location.assign(href); return; }
+      // Already waited above: a short pass for other wallets (no localhost probe), plus bWalletX on the phone.
+      const list = await discoverWallets({ ms: 50, pairing: () => pairing });
+      if (mode !== 'chooser' && !hasBwalletX(list) && !otherDetected(list).length) return 'not-found';
+      return chooseWallet(list, { getUrl: this.#attr('get-url') ?? undefined });
+    }
+
+    async #click(mode: SigninMode = 'signin') {
+      if (this.hasAttribute('disabled') || this.hasAttribute('loading') || this.#busy || this.state === 'pending') return;
+      if (!this.#emit('bwalletx-signin', { element: this, mode }, true)) return;
+
+      if (mode === 'signin') {
+        const href = this.#attr('href');
+        const authorizeUrl = this.#attr('authorize-url');
+        if (authorizeUrl) {
+          location.assign(await buildAuthorizeUrl({ authorizeUrl, clientId: this.#attr('client-id'), redirectUri: this.#attr('redirect-uri'), scope: this.#attr('scope') }));
+          return;
+        }
+        if (href) { location.assign(href); return; }
+      }
 
       const challengeUrl = this.#attr('challenge-url');
       if (!challengeUrl) return; // event-only mode: the page runs its own flow
 
       const own = this.#stateful && !this.#controlled;
+      const prev = this.#phase === 'signed-in' ? 'signed-in' : 'signed-out';
+      const started = Date.now();
+      const pairing = pairingModal();
+      let option: WalletOption | null = null;
       this.#notFound = false;
       this.#busy = true;
+      this.#pendingLabel = PENDING_LABEL;
       if (own) this.#set('pending');
       else this.#render();
       try {
         const ms = Number(this.#attr('discover-ms')) || DEFAULT_DISCOVER_MS;
-        const found = await discoverBwalletX(ms);
-        if (!found) {
+        const picked = await this.#choose(mode, ms, pairing);
+        if (picked === 'not-found') {
           this.#notFound = true;
           if (own) this.#phase = 'signed-out';
+          this.#attempt(null, 'not-found', started);
           this.#emit('bwalletx-not-found');
           if (this.#attr('require-token')) this.#emit('bwalletx-access-denied', { code: 'not_installed', message: 'No wallet found' });
           return;
         }
+        if (!picked) {
+          if (own) this.#phase = prev;
+          this.#attempt(null, 'cancelled', started);
+          return;
+        }
+        option = picked;
+        if (!option.isBwalletX) {
+          this.#pendingLabel = PENDING_LABEL_OTHER;
+          if (own) this.#render();
+        }
+        // Pairing shows the QR here; "Desktop wallet" looks on localhost here (after the tap). No key asked yet.
+        const cw = await option.connect({ identity: false });
+        const wallet = cw.wallet;
+        if (!wallet) throw Object.assign(new Error('This wallet cannot sign in here'), { code: 'NOT_SUPPORTED' });
+        const sub = substrateOf(option);
+        const method = sub === 'extension' ? 'extension' : sub === 'in-app' || sub === 'xdm' ? 'in-app' : sub === 'pairing' ? 'pairing' : 'wallet';
+
         const requireToken = this.#attr('require-token');
         if (requireToken) {
           if (own) this.#phase = 'signed-out'; // the access flow reports through its own events
@@ -550,13 +638,15 @@ function createClass(): CustomElementConstructor {
           const hint = { token: { id: requireToken, ...(minBps ? { minBps: Number(minBps) } : { min: min ?? '1' }) } };
           try {
             const a = await requestAccess({
-              wallet: found.wallet,
+              wallet,
               challenge: (identityKey) => postJson<AccessChallengeLike>(challengeUrl, { identityKey, require: hint }),
               verify: verifyUrl ? (response) => postAccess(verifyUrl, response) : undefined,
             });
+            this.#attempt(option, 'signed-in', started);
             this.#emit('bwalletx-access-granted', { identityKey: a.response.identityKey, response: a.verified });
           } catch (e) {
             const err = e instanceof AccessError ? e : new AccessError('bad_request', String(e));
+            this.#attempt(option, outcomeOf(e), started);
             this.#emit('bwalletx-access-denied', { code: err.code, message: err.message, have: err.have, need: err.need });
           }
           return;
@@ -565,7 +655,7 @@ function createClass(): CustomElementConstructor {
         // reuses the key that signed in here last time, so it is the signature alone.
         const verifyUrl = this.#attr('verify-url');
         const { result: r, verified } = await signInAndVerify({
-          wallet: found.wallet,
+          wallet,
           identityKeyHint: verifyUrl ? rememberedIdentity() : undefined,
           challenge: (identityKey) => postJson<Challenge>(challengeUrl, identityKey ? { identityKey } : {}),
           verify: async (res) => (verifyUrl ? await postJson<Record<string, unknown>>(verifyUrl, { identityKey: res.identityKey, nonce: res.nonce, signature: res.signature }) : {}),
@@ -573,15 +663,24 @@ function createClass(): CustomElementConstructor {
         if (verifyUrl) rememberIdentity(r.identityKey);
         const response = verifyUrl ? (verified as { handle?: string; paymail?: string }) : null;
         if (own) this.#signedIn({ identityKey: r.identityKey, handle: response?.handle ?? null, paymail: response?.paymail ?? null });
-        this.#emit('bwalletx-signed-in', { identityKey: r.identityKey, method: found.method, nonce: r.nonce, signature: r.signature, response });
+        this.#attempt(option, 'signed-in', started);
+        this.#emit('bwalletx-signed-in', { identityKey: r.identityKey, method, nonce: r.nonce, signature: r.signature, response });
       } catch (error) {
+        const outcome = outcomeOf(error);
+        this.#attempt(option, outcome, started);
+        // Closing the phone QR is not an error: back to where we were. Anything else shows as before.
+        const closedQr = outcome === 'cancelled' && option?.kind === 'pairing';
         if (own) {
-          this.#error = signInErrorText(error);
-          this.#phase = 'error';
+          if (closedQr) this.#phase = prev;
+          else {
+            this.#error = signInErrorText(error);
+            this.#phase = 'error';
+          }
         }
-        this.#emit('bwalletx-error', { error });
+        if (!closedQr) this.#emit('bwalletx-error', { error });
       } finally {
         this.#busy = false;
+        try { pairing.close(); } catch { /* closed */ }
         this.#render();
       }
     }

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.6 (unreleased)
+
+Wallet choice (RB, 5 Nov 2026: bWalletX is the default on our sites; no other wallet may take the sign-in flow). A fix: sites showed their own chooser even when only bWalletX was present, so users never saw the wallet sheet, and a wallet that held `window.CWI` was treated as bWalletX.
+
+- **bWalletX is recognised by its own announcement only.** `discoverBwalletX()` / `findBwalletX()` / `connectBwalletX()` no longer take `window.CWI` as bWalletX "in-app": Metanet / BSV Desktop or Yours can set or overwrite it. bWalletX is the BRC-100 announcement with rdns `com.bwalletx.extension` (extension) or `space.bwallet.mobile` (in-app browser; every build since 3 Oct 2026 announces), or the bWalletX app frame over XDM. A bare `window.CWI` is listed by `discoverWallets()` as "Browser wallet" (`substrate: 'window.CWI'`) and is never bWalletX.
+- **Fast path, on by default.** `decideWallet()` (new, pure) is the rule in `runConnect`, `BwalletXProvider.connect()` and `<bwalletx-signin>`: bWalletX here → straight to its sheet, no chooser, even with other wallets installed. Without it → the chooser, **Get bWalletX** first, then the detected wallets; another wallet is never connected unless picked (0.5.5 connected a lone Yours/Metanet with no picker). `picker: false` now means bWalletX, else the phone, else `NOT_FOUND`. `fastPath: false` restores the 0.5.5 rule.
+- **"Other wallets"**: a small link under `<bwalletx-signin>` (lg/md by default; `other-wallets="on|off"`) and in its not-found row; `connect({ chooser: true })` in the provider; the element's `bwalletx-signin` event carries `mode: 'chooser'`.
+- **`chooseWallet(list)`**: the new chooser (Get bWalletX first when absent; bWalletX the gold row when present; phone QR; other wallets tagged "Fewer features"; Desktop wallet; HandCash last; Esc / Cancel / backdrop close it). `pickWallet` is unchanged.
+- **No localhost probe before a tap.** `desktopOption()` ("Desktop wallet") probes localhost:3321 / 3301 only when its `connect()` runs, after the user picked it. `probeLocal` stays off by default.
+- **Telemetry hook**: `onAttempt` (provider prop / `runConnect` option) and the `bwalletx-attempt` event: `{ walletType, substrate, outcome, ms }` per attempt, nothing else.
+- `WalletOption.substrate`, `walletTypeOf`, `substrateOf`, `isPresentBwalletX`, `hasBwalletX`, `otherDetected`; `discoverWallets` also finds bWalletX in its app frame (XDM). `useBwalletX().walletType`.
+- Element: picking another wallet shows "Approve in your wallet…"; closing the phone QR returns to the button without an error.
+
 ## 0.5.5 (unreleased)
 
 - **One wallet sheet to sign in** (owner escalation, 2 Nov 2026: "FIVE PROMPTS??? FOR ONE CONNECTION?" on vexvoid.com). Measured with bWalletX 5.2.48: 0.5.4 asked for a picker plus 3 sheets on localhost, and a picker plus 5 sheets on the live site. Now:

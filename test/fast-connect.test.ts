@@ -28,11 +28,22 @@ describe('fast connect (latency budget)', () => {
     expect(performance.now() - t).toBeLessThan(50);
   });
 
-  it('takes window.CWI at once (in-app browser)', async () => {
-    w.CWI = {};
+  it('resolves the in-app browser at once by its announcement', async () => {
+    const inApp = {};
+    w.CWI = inApp;
+    const on = () =>
+      window.dispatchEvent(new CustomEvent('brc100:announceWallet', { detail: { info: { rdns: 'space.bwallet.mobile' }, wallet: inApp } }));
+    window.addEventListener('brc100:requestWallet', on);
     const t = performance.now();
-    expect((await discoverBwalletX(5000))?.method).toBe('in-app');
+    const f = await discoverBwalletX(5000);
+    window.removeEventListener('brc100:requestWallet', on);
+    expect(f?.method).toBe('in-app');
     expect(performance.now() - t).toBeLessThan(50);
+  });
+
+  it('a bare window.CWI is not bWalletX (another wallet can set it)', async () => {
+    w.CWI = {};
+    expect(await discoverBwalletX(30)).toBeNull();
   });
 
   it('gives up after the short default when nothing is there', async () => {

@@ -4,8 +4,9 @@
  */
 import qrcode from 'qrcode-generator';
 import type { PairingOptions } from './pair.js';
-import type { WalletOption } from './wallets.js';
-import { WEB_WALLET_URL } from './element.js';
+import { desktopOption, type WalletOption } from './wallets.js';
+import { GET_URL, WEB_WALLET_URL, markSvg } from './element.js';
+import { chooserOrder, hasBwalletX, isPresentBwalletX, otherDetected } from './choice.js';
 
 const CSS = `
 .bwx-ov{position:fixed;inset:0;z-index:2147483000;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:16px;font:15px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
@@ -24,7 +25,18 @@ a.bwx-btn{display:block;text-align:center;text-decoration:none;box-sizing:border
 .bwx-list{display:flex;flex-direction:column;gap:8px}
 .bwx-opt{display:flex;align-items:center;gap:10px;text-align:left}
 .bwx-opt img{width:24px;height:24px;border-radius:6px}
-.bwx-tag{margin-left:auto;font-size:11px;color:#8d866f}
+.bwx-tag{margin-left:auto;font-size:11px;color:#8d866f;white-space:nowrap}
+.bwx-opt{min-height:48px;box-sizing:border-box}
+.bwx-mk{display:inline-flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;border-radius:50%;background:#000}
+.bwx-ico{display:inline-grid;place-items:center;flex:none;width:28px;height:28px;border-radius:8px;background:#2a2518;color:#e8c766;font-weight:700;font-size:13px}
+.bwx-opt img{width:28px;height:28px;border-radius:8px;flex:none}
+.bwx-txt{display:flex;flex-direction:column;min-width:0;gap:1px}
+.bwx-txt b{font-weight:600}
+.bwx-txt small{font-size:12px;color:#8d866f;font-weight:400}
+.bwx-primary .bwx-txt small{color:rgba(0,0,0,.68)}
+.bwx-primary .bwx-tag{color:rgba(0,0,0,.6)}
+.bwx-sep{font-size:12px;color:#8d866f;margin:6px 2px 0}
+.bwx-foot{font-size:12px;color:#8d866f;margin:12px 0 0}
 `;
 
 function mount(): { root: HTMLDivElement; box: HTMLDivElement; close: () => void } {
@@ -184,5 +196,120 @@ export function pickWallet(options: WalletOption[], o: { title?: string } = {}):
     ui.root.onclick = (e) => e.target === ui.root && done(null);
     ui.box.append(list, el('div', 'bwx-row'));
     (ui.box.lastChild as HTMLElement).append(cancel);
+  });
+}
+
+export interface ChooseWalletOptions {
+  /** Default "Choose a wallet". */
+  title?: string;
+  /** Where "Get bWalletX" points. Default https://bwalletx.com/get */
+  getUrl?: string;
+  /**
+   * Offer "Desktop wallet" (Metanet / BSV Desktop on localhost). Default true. It probes localhost only when tapped
+   * (desktopOption), never while the chooser opens.
+   */
+  desktop?: boolean;
+}
+
+function optionRow(w: WalletOption, primary: boolean, sub?: string, tag?: string): HTMLButtonElement {
+  const b = el('button', `bwx-btn bwx-opt${primary ? ' bwx-primary' : ''}`);
+  b.type = 'button';
+  b.dataset.wallet = w.id;
+  if (w.isBwalletX) {
+    const mk = el('span', 'bwx-mk');
+    mk.innerHTML = markSvg(18);
+    b.append(mk);
+  } else if (w.icon) {
+    const img = el('img');
+    img.src = w.icon;
+    img.alt = '';
+    b.append(img);
+  } else {
+    b.append(el('span', 'bwx-ico', (w.name.trim().charAt(0) || 'W').toUpperCase()));
+  }
+  const t = el('span', 'bwx-txt');
+  t.append(el('b', '', w.name));
+  if (sub) t.append(el('small', '', sub));
+  b.append(t);
+  if (tag) b.append(el('span', 'bwx-tag', tag));
+  return b;
+}
+
+/**
+ * The wallet chooser (0.5.6). Without bWalletX in this browser, "Get bWalletX" comes first; then bWalletX on the
+ * phone, the other wallets that were detected, "Desktop wallet" (probes localhost only when tapped) and app-supplied
+ * options. Opened from "Other wallets" while bWalletX is here, bWalletX is the first, gold row.
+ * Resolves with the chosen option, or null when closed. "Get bWalletX" is a link and leaves the chooser open.
+ */
+export function chooseWallet(options: readonly WalletOption[], o: ChooseWalletOptions = {}): Promise<WalletOption | null> {
+  if (typeof document === 'undefined') return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const ui = mount();
+    ui.root.dataset.bwxChooser = '';
+    const done = (w: WalletOption | null) => {
+      document.removeEventListener('keydown', onKey, true);
+      ui.close();
+      resolve(w);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        done(null);
+      }
+    };
+    document.addEventListener('keydown', onKey, true);
+    ui.box.append(el('h2', '', o.title ?? 'Choose a wallet'));
+    const list = el('div', 'bwx-list');
+    const here = hasBwalletX(options);
+    if (!here) {
+      const get = el('a', 'bwx-btn bwx-opt bwx-primary');
+      get.href = o.getUrl ?? GET_URL;
+      get.target = '_blank';
+      get.rel = 'noopener';
+      get.dataset.wallet = 'get-bwalletx';
+      const mk = el('span', 'bwx-mk');
+      mk.innerHTML = markSvg(18);
+      const t = el('span', 'bwx-txt');
+      t.append(el('b', '', 'Get bWalletX'), el('small', '', 'Free. Every feature on this site'));
+      get.append(mk, t);
+      list.append(get);
+    }
+    const ordered = chooserOrder(options);
+    const touch = isTouchDevice();
+    let sep = false;
+    for (const w of ordered) {
+      if (!here && !sep) {
+        list.append(el('p', 'bwx-sep', 'Or use'));
+        sep = true;
+      }
+      const sub = isPresentBwalletX(w)
+        ? 'Recommended'
+        : w.kind === 'pairing'
+          ? touch
+            ? 'Open the bWalletX app'
+            : 'Scan a QR with your phone'
+          : undefined;
+      const tag = w.kind === 'handcash' ? 'until BRC-100' : !w.isBwalletX && w.kind === 'brc100' ? 'Fewer features' : undefined;
+      const row = optionRow(w, isPresentBwalletX(w), sub, tag);
+      row.onclick = () => done(w);
+      list.append(row);
+    }
+    if (o.desktop !== false && !options.some((w) => w.substrate === 'json-api' || w.substrate === 'cicada')) {
+      if (!here && !sep) list.append(el('p', 'bwx-sep', 'Or use'));
+      const d = desktopOption();
+      const row = optionRow(d, false, 'Metanet or BSV Desktop on this computer', 'Fewer features');
+      row.onclick = () => done(d);
+      list.append(row);
+    }
+    ui.box.append(list);
+    if (otherDetected(options).length || !here) ui.box.append(el('p', 'bwx-foot', 'Some features need bWalletX.'));
+    const row = el('div', 'bwx-row');
+    const cancel = el('button', 'bwx-btn', 'Cancel');
+    cancel.type = 'button';
+    cancel.onclick = () => done(null);
+    row.append(cancel);
+    ui.box.append(row);
+    ui.root.onclick = (e) => e.target === ui.root && done(null);
+    (list.querySelector('a,button') as HTMLElement | null)?.focus();
   });
 }

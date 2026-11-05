@@ -95,7 +95,7 @@ function Account() {
 
 `useBwalletX()` gives `status` (`idle | restoring | connecting | connected | error`), `identityKey`, `handle`, `paymail`, `wallet` (the BRC-100 `WalletInterface`), `walletId`, `signedIn`, `error`, `wallets`, `connect({ walletId? })`, `disconnect()`, `listWallets()`, `pay`, `tip` and `buyToken`.
 
-`connect()` finds wallets and signs in through your routes when `challengeUrl` and `verifyUrl` are set, with **one wallet sheet**: the challenge comes first (no key), then the identity key and the signature are asked for together, and a repeat sign-in on the same site is the signature alone. With one wallet in the browser there is no picker; the picker shows only for a real choice (two wallets, or an app option such as HandCash), lists bWalletX once, and offers the pairing QR for phones. Nothing touches `window` during render, so the provider is safe in server-rendered pages. After a reload the session comes back from `sessionUrl`, but `wallet` stays `null` until the user calls `connect()` again.
+`connect()` finds wallets and signs in through your routes when `challengeUrl` and `verifyUrl` are set, with **one wallet sheet**: the challenge comes first (no key), then the identity key and the signature are asked for together, and a repeat sign-in on the same site is the signature alone. With bWalletX in the browser there is no chooser at all (0.5.6); without it the chooser opens with "Get bWalletX" first, and another wallet is used only when picked (see "Which wallet signs in"). Nothing touches `window` during render, so the provider is safe in server-rendered pages. After a reload the session comes back from `sessionUrl`, but `wallet` stays `null` until the user calls `connect()` again.
 
 ### Drop-in: provider + one element + 3 routes
 
@@ -148,12 +148,36 @@ Every expected output has to be matched by a different output that carries at le
 `discoverWallets()` lists everything it can find, with bWalletX first:
 
 - every wallet that announces itself through BRC-100 discovery (bWalletX, Yours, Metanet and others)
-- the in-app browser's `window.CWI`
-- desktop wallets on localhost ports 3321 and 3301 (only with `probeLocal: true`)
+- bWalletX in its own app frame (XDM, only from bWalletX's origins)
+- a `window.CWI` that nobody announced, under a neutral name ("Browser wallet"); it is never taken for bWalletX
+- desktop wallets on localhost ports 3321 and 3301 (only with `probeLocal: true`; prefer `desktopOption()`, below)
 - phone pairing (`pairing: pairingModal()`)
 - any adapters you add in `extra`
 
-`pickWallet(list)` shows the picker. `pairingModal()` returns `PairingOptions` that draw the QR code and match code, so you no longer need your own QR library. On phones and tablets it shows an **Open bWalletX** button (the pairing universal link opens the app) and a web.bwalletx.com fallback instead of a QR; pass `mode: 'qr'` or `'app'` to force one.
+`pairingModal()` returns `PairingOptions` that draw the QR code and match code, so you no longer need your own QR library. On phones and tablets it shows an **Open bWalletX** button (the pairing universal link opens the app) and a web.bwalletx.com fallback instead of a QR; pass `mode: 'qr'` or `'app'` to force one.
+
+### Which wallet signs in (0.5.6)
+
+bWalletX is the default on our sites, and no other wallet may take the sign-in flow:
+
+1. **bWalletX is recognised by its own announcement** (`com.bwalletx.extension`, `space.bwallet.mobile`) or by the bWalletX app frame, never by who holds `window.CWI`. Metanet / BSV Desktop or Yours can set or overwrite `window.CWI`; `discoverBwalletX()` no longer takes it.
+2. **bWalletX here → straight to its sheet.** No site chooser. A small **Other wallets** link under the button opens the chooser (phone QR, other browser wallets, desktop wallets).
+3. **No bWalletX → the chooser, "Get bWalletX" first**, then what was detected. Another wallet is connected only when the user picks it, even when it is the only one.
+4. **No localhost probe on load.** "Desktop wallet" in the chooser (`desktopOption()`) looks on localhost:3321 / 3301 only when tapped, so Chrome's Local Network Access prompt follows a tap.
+
+`decideWallet(list, { chooser, picker, walletId, fastPath })` is the rule as a pure function; `runConnect`, `BwalletXProvider` and `<bwalletx-signin>` all use it. `chooseWallet(list)` is the chooser UI (`pickWallet` is the 0.5.5 one, still exported). If your site has its own chooser, call `decideWallet` first and show yours only when it answers `{ reason: 'chooser' }`:
+
+```ts
+import { discoverWallets, decideWallet, chooseWallet, pairingModal } from '@bwalletx/connect';
+
+const list = await discoverWallets({ pairing: () => pairingModal() });
+const { option, reason } = decideWallet(list);            // bWalletX here → option, no chooser
+const chosen = option ?? (reason === 'chooser' ? await chooseWallet(list) : null);
+```
+
+`BwalletXProvider fastPath={false}` (or `runConnect({ fastPath: false })`) restores the 0.5.5 picker rule. `connect({ chooser: true })` is the "Other wallets" link. `<bwalletx-signin other-wallets="auto|on|off">` controls the link (auto: shown at lg/md when the element signs in).
+
+**Telemetry.** `onAttempt` (provider prop, `runConnect` option) and the element's `bwalletx-attempt` event report one record per attempt: `{ walletType, substrate, outcome, ms }`. `walletType` is `'bwalletx'` or the other wallet's rdns / option id; `substrate` is how it reached the page (`extension`, `in-app`, `xdm`, `injected`, `window.CWI`, `json-api`, `cicada`, `pairing`, `adapter`); `outcome` is `signed-in`, `connected`, `cancelled`, `rejected`, `not-found` or `error`. No keys, addresses or identity data.
 
 ## Migrating from HandCash Connect
 
