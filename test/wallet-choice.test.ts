@@ -193,6 +193,30 @@ describe('fast path (BwalletXProvider.connect / runConnect)', () => {
   });
 });
 
+describe('first sign-in = one wallet sheet (vexvoid, 5 Nov: two bundles on 0.5.4)', () => {
+  it('connect({ walletId }) sends the identity key and the signature inside one 60 ms merge window', async () => {
+    // 0.5.4 asked getPublicKey in connect(), waited for the approval, then signed: bundle 1, then bundle 2 ~1 s later.
+    const root = PrivateKey.fromRandom();
+    const pw = new ProtoWallet(root);
+    const asked: { m: string; t: number }[] = [];
+    const sheet = async <T>(m: string, run: () => Promise<T>) => {
+      asked.push({ m, t: Date.now() });
+      await tick(150); // the sheet is up until the user taps
+      return run();
+    };
+    const wallet = {
+      isAuthenticated: async () => ({ authenticated: true }),
+      getPublicKey: (a: Parameters<ProtoWallet['getPublicKey']>[0]) => sheet('getPublicKey', () => pw.getPublicKey(a)),
+      createSignature: (a: Parameters<ProtoWallet['createSignature']>[0]) => sheet('createSignature', () => pw.createSignature(a)),
+    } as unknown as WalletInterface;
+    const ext = brc100Option(wallet, { id: 'com.bwalletx.extension', rdns: 'com.bwalletx.extension', name: 'bWalletX', isBwalletX: true, substrate: 'extension' });
+    const r = await runConnect({ list: [ext], walletId: ext.id, pick: noPick, challengeUrl: '/c', verifyUrl: '/v', post: site().post });
+    expect(r?.signedIn).toBe(true);
+    expect(asked.map((a) => a.m).sort()).toEqual(['createSignature', 'getPublicKey']);
+    expect(Math.abs(asked[0].t - asked[1].t)).toBeLessThan(60);
+  });
+});
+
 describe('the chooser', () => {
   const rows = () => Array.from(document.querySelectorAll<HTMLElement>('[data-bwx-chooser] [data-wallet]')).map((e) => e.dataset.wallet);
 
