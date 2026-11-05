@@ -62,6 +62,10 @@ The cookie (`bwx_session`) is `HttpOnly; SameSite=Lax; Secure` (Secure when the 
 
 Create the nonce table once (a migration): `pgNonceTableSql()` returns the SQL.
 
+**Hydration warning.** bWalletX for Chrome adds a `data-bwalletx-ext` attribute to `<html>` and `<body>` before React hydrates, so Next.js logs a harmless hydration mismatch. Put `suppressHydrationWarning` on both in `app/layout.tsx`: `<html lang="en" suppressHydrationWarning>` and `<body suppressHydrationWarning>`. It only silences attribute differences on those two elements, not in your components.
+
+**One sheet needs the server too.** The client and the challenge route must both be 0.5.5 or newer: an older `createChallenge` refuses a challenge without an identity key, and the client then falls back to asking for the key first (two wallet sheets).
+
 ## React quick start
 
 ```tsx
