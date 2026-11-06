@@ -129,7 +129,7 @@ const r = await pay(wallet, { to: identityKeyHex, sats: 100 });            // BR
 await buyToken(wallet, { token: '$BOASE', amount: 100, quote: (q) => fetch('/api/quote', { method: 'POST', body: JSON.stringify(q) }).then((x) => x.json()) });
 ```
 
-Each call makes one `createAction`, and nothing is ever retried. Failures throw a `PaymentError` with a `code` (`BAD_REQUEST`, `RESOLVE_FAILED`, `RATE_FAILED`, `WALLET_REJECTED`, `WALLET_ERROR`, `NOT_SUPPORTED`, `INSUFFICIENT_FUNDS`). A wallet with no coins for the fee (0.7.0: the SDK's `WERR_INSUFFICIENT_FUNDS`, also over Metanet Desktop's JSON API, or a wallet's own "insufficient funds") gives `INSUFFICIENT_FUNDS` with `maybeSent: false` and one plain line you can show as is: "Your wallet has no coins to pay the small network fee. Add a few pence and try again." (`NO_COINS_TEXT`; `isInsufficientFunds(e)` for your own calls). When `maybeSent` is true, the wallet may already have broadcast the payment, so check before you ask the user again. Browsers often can't resolve paymails themselves because of CORS, so pass `resolvePaymail` to do it on your server.
+Each call makes one `createAction`, and nothing is ever retried. Failures throw a `PaymentError` with a `code` (`BAD_REQUEST`, `RESOLVE_FAILED`, `RATE_FAILED`, `WALLET_REJECTED`, `WALLET_ERROR`, `NOT_SUPPORTED`, `INSUFFICIENT_FUNDS`). A wallet with no coins for the fee (0.7.0: the SDK's `WERR_INSUFFICIENT_FUNDS`, also over Metanet Desktop's JSON API, or a wallet's own "insufficient funds") gives `INSUFFICIENT_FUNDS` with `maybeSent: false` and one plain line you can show as is: "Your wallet doesn't have enough to cover this payment and its small network fee. Add a little and try again." (`NO_COINS_TEXT`; `isInsufficientFunds(e)` for your own calls). When `maybeSent` is true, the wallet may already have broadcast the payment, so check before you ask the user again. Browsers often can't resolve paymails themselves because of CORS, so pass `resolvePaymail` to do it on your server.
 
 **Verify payments on your server.** A txid or BEEF that comes back to the page is only what the page was told: a
 browser extension, a modified page or (before 0.5.2) a parent frame posing as the wallet can return a fake one.
@@ -189,15 +189,17 @@ After a sign-in the user explicitly picked, the wallet **type** is remembered fo
 
 **Use Metanet Desktop or another BRC-100 wallet** · *Metanet Desktop must be running on this computer.* A small link under `<bwalletx-signin>` (lg/md; `metanet="auto|on|off"`), a row in the chooser, `useBwalletX().connectMetanet()` or `runConnect({ metanet: true })`. The same rules as the bChatX door:
 
-1. **bWalletX stays the default.** It is found by its own announcement only; the button's discovery never picks Metanet, remembered or not.
+1. **bWalletX stays the default.** It is found by its own announcement only; the button's discovery never picks Metanet, remembered or not. No desktop wallet on localhost is picked without its own tap: not by `autoChoice` / `fastPath={false}`, not after `probeLocal`, and not from a remembered 0.6.0 "Desktop wallet" (`isLocalDesktop`).
 2. **Pinned, and only on its own tap.** `WalletClient('json-api')` on localhost:3321, never `'auto'` (which would let the bWalletX extension or `window.CWI` answer). A first visit makes no :3321 call on page load.
-3. **Remembered:** the wallet type (`bwx:wallet = { "type": "metanet", "substrate": "json-api" }`) and the identity keys known on this origin (`bwx:known-keys`, public keys only).
+3. **Remembered:** the wallet type (`bwx:wallet = { "type": "metanet", "substrate": "json-api" }`) and the identity keys known on this origin (`bwx:known-keys`, public keys only). A key counts as known only after your verify route accepted its sign-in (or it matches the server session); a plain connect adds nothing.
 4. **Back with Metanet remembered:** one silent attempt per page load, a 2 s window (`trySilentMetanet` / `runSilentMetanet`). It goes on only if Metanet returns an identity key already known here, since whatever answers on :3321 might be another profile or another local process. Otherwise the normal choice, with no error banner and no retry. With a server session, it only attaches the wallet when it holds the session's key.
 5. **"Not you? Use another wallet"** (shown while Metanet is remembered) and Disconnect forget the choice; `useBwalletX().forgetWallet()` for your own UI. A sign-in dropped this way lands nobody (`logoutUrl` ends a session its verify already set).
 6. **Computers only**, never inside a frame (`metanetOffered()`).
 7. **The minimum:** `getVersion`, `isAuthenticated` (never prompts), the identity key, then the sign-in signature, one request at a time. No protocol permission requests at connect.
 
 Nothing on :3321 after a tap shows "We couldn’t reach Metanet Desktop. Open it, then try again."
+
+**`logoutUrl` / `logout-url` is required whenever `verifyUrl` / `verify-url` is set.** "Not you? Use another wallet" and Disconnect end the session the verify route created by POSTing to it; without it a silent Metanet sign-in the person rejected would stay signed in. In development the provider and the element `console.warn` once when it is missing.
 
 **Telemetry.** `onAttempt` (provider prop, `runConnect` option) and the element's `bwalletx-attempt` event report one record per attempt: `{ walletType, substrate, outcome, ms }`. `walletType` is `'bwalletx'` or the other wallet's rdns / option id; `substrate` is how it reached the page (`extension`, `in-app`, `xdm`, `injected`, `window.CWI`, `json-api`, `cicada`, `pairing`, `adapter`); `outcome` is `signed-in`, `connected`, `cancelled`, `rejected`, `not-found` or `error`. No keys, addresses or identity data.
 

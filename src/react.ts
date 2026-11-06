@@ -23,7 +23,7 @@ import type { WalletInterface } from '@bsv/sdk';
 import { clearPairing } from './pair.js';
 import { declareWalletTheme } from './theme.js';
 import { runConnect, runSilentMetanet } from './connect-flow.js';
-import { metanetOffered, silentAttemptUsed, METANET_TYPE } from './metanet.js';
+import { metanetOffered, silentAttemptUsed, warnIfNoLogout, METANET_TYPE } from './metanet.js';
 import { chooseWallet, pairingModal, pickWallet } from './modal.js';
 import {
   attachRemembered, forgetWalletChoice, needsBwalletX, planAutoConnect, rememberedWalletChoice, walletTypeOf,
@@ -265,7 +265,10 @@ export interface BwalletXProviderProps {
   challengeUrl?: string;
   /** POST { identityKey, nonce, signature } → { identityKey, handle?, paymail? } and sets the cookie. */
   verifyUrl?: string;
-  /** POST to clear the cookie on disconnect(). */
+  /**
+   * POST to clear the cookie on disconnect(). REQUIRED whenever verifyUrl is set (0.7.0): "Not you? Use another wallet"
+   * and disconnect() end a session the verify route created through it. Missing → a console.warn in development.
+   */
   logoutUrl?: string;
   /** GET → { identityKey, handle?, paymail? } to restore a session on load. */
   sessionUrl?: string;
@@ -353,6 +356,10 @@ export function BwalletXProvider(p: BwalletXProviderProps): ReactElement {
     props.current.onError?.(err);
     return err;
   }, []);
+
+  useEffect(() => {
+    warnIfNoLogout({ verifyUrl: p.verifyUrl, logoutUrl: p.logoutUrl, where: '<BwalletXProvider>' });
+  }, [p.verifyUrl, p.logoutUrl]);
 
   const themeOn = !!p.theme && (state.status === 'connecting' || state.status === 'connected');
   useEffect(() => {

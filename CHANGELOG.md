@@ -11,7 +11,8 @@
 - **"Not you? Use another wallet"** under the button while Metanet is remembered (element `notYou()`, event `bwalletx-not-you`, `useBwalletX().forgetWallet()`), and Disconnect, forget the choice; a sign-in dropped mid-way lands nobody.
 - **Computers only**, never in a frame (`metanetOffered()`, `inAnyFrame()`); the chooser row is hidden there too.
 - **The minimum asked:** getVersion, isAuthenticated, the identity key, then the site's own call (the sign-in signature), one at a time; no protocol permission requests at connect.
-- **No coins:** a `createAction` that fails for lack of funds throws `PaymentError` `INSUFFICIENT_FUNDS` (`maybeSent: false`) with "Your wallet has no coins to pay the small network fee. Add a few pence and try again." (`NO_COINS_TEXT`, `isInsufficientFunds`).
+- **No coins:** a `createAction` that fails for lack of funds throws `PaymentError` `INSUFFICIENT_FUNDS` (`maybeSent: false`) with "Your wallet doesn't have enough to cover this payment and its small network fee. Add a little and try again." (`NO_COINS_TEXT`, `isInsufficientFunds`).
+- **Security review fixes:** no desktop wallet on localhost (Metanet on 3321, Cicada on 3301, `probeLocal`, a remembered 0.6.0 "Desktop wallet") is ever picked without its own tap: `autoChoice` and `matchRemembered` skip them (`isLocalDesktop`, `isLocalDesktopType`); a remembered `desktop` now plans `'none'`. Identity keys count as known only after a verified sign-in or a session match. `logoutUrl` / `logout-url` is required with `verifyUrl` (dev `console.warn`, `warnIfNoLogout`).
 - `isTouchDevice` moved to its own module (still exported from the package root and `modal`).
 
 ## 0.6.0 (unreleased)

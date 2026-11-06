@@ -14,7 +14,7 @@ export { defineBwalletxButton, getUrlFor, stateFor, handleLabel, dropLegacyConne
 export type { ButtonState } from './wallet-button.js';
 export { pay, tip, buyToken, amountInSats, resolvePaymailP2P, PaymentError, BRC29_PROTOCOL, isPaymail, isIdentityKeyHex, isInsufficientFunds, NO_COINS_TEXT } from './pay.js';
 export type { PayRequest, PayResult, PayOptions, PayOutput, PaySource, LegacyPayer, Brc29Remittance, BuyTokenRequest, TokenQuote, PaymentErrorCode } from './pay.js';
-export { discoverWallets, brc100Option, pairingOption, desktopOption, handcashAdapter, autoChoice, cwiIsAnnounced, DESKTOP_OPTION_ID } from './wallets.js';
+export { discoverWallets, brc100Option, pairingOption, desktopOption, handcashAdapter, autoChoice, cwiIsAnnounced, isLocalDesktop, DESKTOP_OPTION_ID } from './wallets.js';
 export type { WalletOption, ConnectedWallet, WalletKind, Substrate, DiscoverWalletsOptions, HandCashAdapterOptions, ConnectOptions } from './wallets.js';
 export { isTouchDevice, pairingModal, pickWallet, chooseWallet, qrSvg } from './modal.js';
 export type { PairingModalOptions, ChooseWalletOptions } from './modal.js';
@@ -22,7 +22,7 @@ export {
   BWALLETX_TYPE, decideWallet, hasBwalletX, isPresentBwalletX, otherDetected, chooserOrder, walletTypeOf, substrateOf,
   attemptFor, outcomeOf, reportAttempt,
   WALLET_CHOICE_KEY, rememberWalletChoice, rememberedWalletChoice, forgetWalletChoice, isRememberable, isExplicitPick,
-  matchRemembered, needsBwalletX, tapGoesElsewhere, planAutoConnect, attachRemembered,
+  matchRemembered, needsBwalletX, tapGoesElsewhere, isLocalDesktopType, planAutoConnect, attachRemembered,
 } from './choice.js';
 export type {
   WalletChoice, ChoiceReason, DecideWalletOptions, ConnectAttempt, AttemptOutcome, AttemptHook, RememberedWallet, AutoConnectAction, AutoConnectPlan,
@@ -38,5 +38,6 @@ export {
   METANET_TYPE, METANET_OPTION_ID, METANET_JSON_API, METANET_LABEL, METANET_NOTE, METANET_REMEMBERED_NOTE, NOT_YOU_LABEL, METANET_UNREACHABLE,
   METANET_ANSWER_MS, METANET_SILENT_MS, KNOWN_KEYS_KEY, MetanetUnreachableError, metanetOption, connectMetanetDesktop, metanetOffered, inAnyFrame,
   knownIdentityKeys, isKnownIdentityKey, rememberKnownIdentityKey, trySilentMetanet, silentAttemptUsed, claimSilentAttempt, resetSilentAttempt,
+  warnIfNoLogout,
 } from './metanet.js';
 export type { MetanetOptions, SilentMetanetResult, SilentStop, FrameWindow } from './metanet.js';

@@ -132,8 +132,9 @@ async function finish(o: ConnectFlowOptions, choice: WalletOption, reason: Choic
     identityKey = (await cw.wallet.getPublicKey({ identityKey: true })).publicKey;
   }
   if (o.remember && isExplicitPick(choice, reason)) rememberWalletChoice(choice);
-  // 0.7.0: the identity keys known on this origin (public keys), for Metanet's known-key-only silent attempt.
-  if (o.remember) rememberKnownIdentityKey(identityKey);
+  // 0.7.0: the identity keys known on this origin (public keys), for Metanet's known-key-only silent attempt. ONLY a
+  // key that proved itself to the site's verify route: a plain connect (no sign-in) proves nothing about the person.
+  if (o.remember && signedIn) rememberKnownIdentityKey(identityKey);
   reportAttempt(o.onAttempt, attemptFor(choice, signedIn ? 'signed-in' : 'connected', started));
   return { connected: cw, identityKey, handle, paymail, signedIn, walletType: walletTypeOf(choice), substrate: substrateOf(choice), reason };
 }
@@ -170,7 +171,8 @@ export async function runSilentMetanet(o: SilentMetanetOptions = {}): Promise<Co
   const cw: ConnectedWallet = { wallet: s.wallet, payer: s.wallet, identityKey: s.identityKey, optionId: METANET_OPTION_ID, kind: 'brc100' };
   const done = (signedIn: boolean, handle: string | null = null, paymail: string | null = null): ConnectFlowResult => {
     rememberWalletChoice(opt);
-    rememberKnownIdentityKey(s.identityKey);
+    // Known only after a verified sign-in, or a match with the server session's key (both are signedIn here).
+    if (signedIn) rememberKnownIdentityKey(s.identityKey);
     reportAttempt(o.onAttempt, attemptFor(opt, signedIn ? 'signed-in' : 'connected', started));
     return { connected: cw, identityKey: s.identityKey, handle, paymail, signedIn, walletType: walletTypeOf(opt), substrate: 'json-api', reason: 'remembered' };
   };

@@ -165,13 +165,11 @@ describe('returning visitor: the tap goes straight to the remembered wallet', ()
     expect(rememberedWalletChoice()).toEqual({ type: 'bwalletx', substrate: 'extension' });
   });
 
-  it('a remembered desktop wallet probes localhost only when connected (after the tap)', async () => {
-    const d = matchRemembered([], { type: 'desktop', substrate: 'json-api' })!;
-    expect(d.id).toBe('desktop');
+  it('a remembered desktop wallet is never the button\'s pick (0.7.0: only its own Metanet link reaches localhost)', async () => {
+    expect(matchRemembered([], { type: 'desktop', substrate: 'json-api' })).toBeNull();
+    expect(matchRemembered([], { type: 'localhost:3301', substrate: 'cicada' })).toBeNull();
     await tick(10);
     expect(localHits()).toEqual([]);
-    await expect(d.connect()).rejects.toMatchObject({ code: 'NOT_FOUND' });
-    expect(localHits().length).toBeGreaterThan(0);
   });
 });
 
@@ -182,7 +180,8 @@ describe('on load: nothing that could prompt', () => {
     expect(planAutoConnect({ remembered: inj, signedIn: true, enabled: false }).action).toBe('none');
     expect(planAutoConnect({ remembered: inj, signedIn: true })).toEqual({ action: 'attach', remembered: inj, needsBwalletX: true });
     expect(planAutoConnect({ remembered: inj, signedIn: false }).action).toBe('wait-for-tap');
-    expect(planAutoConnect({ remembered: { type: 'desktop', substrate: 'json-api' }, signedIn: true }).action).toBe('wait-for-tap');
+    // 0.7.0: a remembered desktop wallet (Metanet on :3321) is never picked by the button: nothing to wait for.
+    expect(planAutoConnect({ remembered: { type: 'desktop', substrate: 'json-api' }, signedIn: true }).action).toBe('none');
     expect(planAutoConnect({ remembered: { type: 'bwalletx', substrate: 'pairing' }, signedIn: true }).action).toBe('wait-for-tap');
     expect(planAutoConnect({ remembered: { type: 'bwalletx', substrate: 'extension' }, signedIn: true })).toMatchObject({ action: 'attach', needsBwalletX: false });
   });

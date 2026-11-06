@@ -261,12 +261,24 @@ export function desktopOption(ms = 1500): WalletOption {
  * `force` (picker off): the first detected wallet, else the first non-pairing option, else pairing.
  */
 export function autoChoice(list: WalletOption[], force = false): WalletOption | null | undefined {
-  const detected = list.filter((w) => w.kind === 'brc100');
-  const others = list.filter((w) => w.kind === 'handcash' || w.kind === 'custom');
-  if (force) return detected[0] ?? list.find((w) => w.kind !== 'pairing') ?? list[0] ?? null;
+  // 0.7.0: a desktop wallet on localhost (Metanet on 3321, Cicada on 3301, e.g. found with probeLocal) is never picked
+  // without its own tap. It still counts as a choice, so its presence opens the picker instead.
+  const auto = list.filter((w) => !isLocalDesktop(w));
+  const detected = auto.filter((w) => w.kind === 'brc100');
+  const others = auto.filter((w) => w.kind === 'handcash' || w.kind === 'custom');
+  const hasLocal = auto.length !== list.length;
+  if (force) return detected[0] ?? auto.find((w) => w.kind !== 'pairing') ?? auto[0] ?? null;
   if (!list.length) return null;
-  if (list.length === 1) return list[0]!;
-  if (detected.length === 1 && others.length === 0) return detected[0]!;
-  if (detected.length === 0 && others.length === 0) return list[0]!;
+  if (list.length === 1) return hasLocal ? undefined : list[0]!;
+  if (detected.length === 1 && others.length === 0 && !hasLocal) return detected[0]!;
+  if (detected.length === 0 && others.length === 0) return auto[0] ?? undefined;
   return undefined;
+}
+
+/**
+ * (0.7.0) A desktop wallet reached over localhost (json-api on 3321 = Metanet Desktop, Cicada on 3301): never picked
+ * by the button, the fast path or a remembered choice; only by its own tap ("Use Metanet Desktop…").
+ */
+export function isLocalDesktop(w: Pick<WalletOption, 'id' | 'substrate'>): boolean {
+  return w.substrate === 'json-api' || w.substrate === 'cicada' || w.id === 'localhost:3321' || w.id === 'localhost:3301' || w.id === DESKTOP_OPTION_ID;
 }

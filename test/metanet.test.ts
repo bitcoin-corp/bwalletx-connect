@@ -18,12 +18,12 @@ import { PrivateKey, ProtoWallet, WERR_INSUFFICIENT_FUNDS, type WalletInterface 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   connectMetanetDesktop, inAnyFrame, isKnownIdentityKey, knownIdentityKeys, metanetOffered, metanetOption, rememberKnownIdentityKey,
-  resetSilentAttempt, trySilentMetanet, KNOWN_KEYS_KEY, METANET_LABEL, METANET_NOTE, METANET_SILENT_MS, METANET_UNREACHABLE, NOT_YOU_LABEL,
+  resetLogoutWarning, resetSilentAttempt, trySilentMetanet, warnIfNoLogout, KNOWN_KEYS_KEY, METANET_LABEL, METANET_NOTE, METANET_SILENT_MS, METANET_UNREACHABLE, NOT_YOU_LABEL,
 } from '../src/metanet';
 import { decideWallet, forgetWalletChoice, matchRemembered, planAutoConnect, rememberedWalletChoice, WALLET_CHOICE_KEY } from '../src/choice';
 import { runConnect, runSilentMetanet } from '../src/connect-flow';
 import { chooseWallet } from '../src/modal';
-import { discoverWallets, type WalletOption } from '../src/wallets';
+import { autoChoice, brc100Option, desktopOption, discoverWallets, isLocalDesktop, type WalletOption } from '../src/wallets';
 import { defineBwalletxSignin } from '../src/element';
 import { pay, NO_COINS_TEXT, PaymentError } from '../src/pay';
 import { LOGIN_PROTOCOL } from '../src/signin';
@@ -505,7 +505,7 @@ describe('8. no coins for the fee: one plain message', () => {
     const e = await pay(w, { to: to(), sats: 1000 }).catch((x) => x);
     expect(e).toBeInstanceOf(PaymentError);
     expect(e).toMatchObject({ code: 'INSUFFICIENT_FUNDS', message: NO_COINS_TEXT, maybeSent: false });
-    expect(NO_COINS_TEXT).toBe('Your wallet has no coins to pay the small network fee. Add a few pence and try again.');
+    expect(NO_COINS_TEXT).toBe("Your wallet doesn't have enough to cover this payment and its small network fee. Add a little and try again.");
   });
 
   it('any wallet\'s own "insufficient funds" text gets the same line; other errors are unchanged', async () => {
@@ -514,5 +514,91 @@ describe('8. no coins for the fee: one plain message', () => {
     await expect(pay(wallet(new Error('Not enough funds to cover the fee')), { to: to(), sats: 100 })).rejects.toMatchObject({ message: NO_COINS_TEXT });
     await expect(pay(wallet(new Error('broadcast failed')), { to: to(), sats: 100 })).rejects.toMatchObject({ code: 'WALLET_ERROR', maybeSent: true });
     await expect(pay(wallet(new Error('User denied')), { to: to(), sats: 100 })).rejects.toMatchObject({ code: 'WALLET_REJECTED' });
+  });
+});
+
+describe('review fix 1: no desktop wallet on localhost is picked without its own tap', () => {
+  const yoursOpt = () => brc100Option({} as WalletInterface, { id: 'io.yours', rdns: 'io.yours', name: 'Yours', substrate: 'injected' });
+  const localOpt = () => brc100Option({} as WalletInterface, { id: 'localhost:3321', name: 'Desktop wallet (localhost:3321)', substrate: 'json-api' });
+
+  it('autoChoice (fastPath={false}) never returns a localhost wallet; its presence means the picker', () => {
+    expect(isLocalDesktop(localOpt())).toBe(true);
+    expect(isLocalDesktop(desktopOption())).toBe(true);
+    expect(isLocalDesktop(metanetOption())).toBe(true);
+    expect(autoChoice([localOpt()])).toBeUndefined();
+    expect(autoChoice([yoursOpt(), localOpt()])).toBeUndefined();
+    expect(autoChoice([localOpt()], true)).toBeNull();
+    expect(autoChoice([localOpt(), yoursOpt()], true)?.id).toBe('io.yours');
+    expect(autoChoice([yoursOpt()])?.id).toBe('io.yours'); // the 0.5.5 rule otherwise unchanged
+  });
+
+  it('probeLocal + fastPath={false}: the tap opens the picker; Metanet is never connected or asked to sign', async () => {
+    metanet = fakeMetanet();
+    const list = await discoverWallets({ ms: 20, probeLocal: true });
+    expect(list.some((o) => o.id === 'localhost:3321')).toBe(true);
+    const pick = vi.fn(async () => null);
+    expect(await runConnect({ list, fastPath: false, pick, challengeUrl: '/c', verifyUrl: '/v', post })).toBeNull();
+    expect(pick).toHaveBeenCalledOnce();
+    expect(metanet.methods()).not.toContain('getPublicKey');
+    expect(metanet.methods()).not.toContain('createSignature');
+    await expect(runConnect({ list, fastPath: false, picker: false, pick: noPick, post })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(metanet.methods()).not.toContain('getPublicKey');
+  });
+
+  it('probeLocal + a remembered "desktop" (fast path): the chooser, not Metanet', async () => {
+    metanet = fakeMetanet();
+    const list = await discoverWallets({ ms: 20, probeLocal: true });
+    const remembered = { type: 'desktop', substrate: 'json-api' as const };
+    expect(decideWallet(list, { remembered }).reason).toBe('chooser');
+    const pick = vi.fn(async () => null);
+    expect(await runConnect({ list, remembered, pick, challengeUrl: '/c', verifyUrl: '/v', post })).toBeNull();
+    expect(pick).toHaveBeenCalledOnce();
+    expect(metanet.methods()).not.toContain('createSignature');
+    expect(planAutoConnect({ remembered, signedIn: false }).action).toBe('none');
+  });
+});
+
+describe('review fix 2: a key is "known" only after a verified sign-in (or a session match)', () => {
+  it('runConnect: a plain connect remembers the type but adds no known key; a verified sign-in adds it', async () => {
+    metanet = fakeMetanet();
+    const plain = await runConnect({ list: [], metanet: true, remember: true, pick: noPick, post });
+    expect(plain).toMatchObject({ signedIn: false, identityKey: metanet.key });
+    expect(rememberedWalletChoice()).toEqual(META_KEY);
+    expect(knownIdentityKeys()).toEqual([]);
+    await runConnect({ list: [], metanet: true, remember: true, pick: noPick, challengeUrl: '/c', verifyUrl: '/v', post });
+    expect(knownIdentityKeys()).toEqual([metanet.key]);
+  });
+
+  it('the element without verify-url (nothing proved to a server) adds no known key', async () => {
+    metanet = fakeMetanet();
+    const el = mount();
+    el.removeAttribute('verify-url');
+    metanetLink(el)!.click();
+    await until(() => el.state === 'signed-in');
+    expect(knownIdentityKeys()).toEqual([]);
+  });
+
+  it('runSilentMetanet with a session for another key attaches nothing and records nothing', async () => {
+    metanet = fakeMetanet();
+    localStorage.setItem(WALLET_CHOICE_KEY, JSON.stringify({ ...META_KEY, v: 1 }));
+    localStorage.setItem('bwx:identityKey', metanet.key); // known as the last sign-in's key
+    expect(await runSilentMetanet({ sessionKey: PrivateKey.fromRandom().toPublicKey().toString() })).toBeNull();
+    expect(knownIdentityKeys()).toEqual([]);
+  });
+});
+
+describe('review fix 3: logout-url is required with verify-url', () => {
+  it('warns once in development when it is missing; not when it is set', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    resetLogoutWarning();
+    mount({ 'logout-url': '/out' });
+    expect(warn).not.toHaveBeenCalled();
+    mount();
+    mount();
+    expect(warn).toHaveBeenCalledOnce();
+    expect(String(warn.mock.calls[0]![0])).toContain('logout URL');
+    resetLogoutWarning();
+    expect(warnIfNoLogout({ verifyUrl: '/v', logoutUrl: '/out', where: 'x' })).toBe(false);
+    warn.mockRestore();
   });
 });

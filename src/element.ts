@@ -35,7 +35,8 @@
  *                 another wallet", which forgets it
  *   wallet-type   (driven by a provider) the connected or remembered wallet type, for the Switch note
  *   session-url   GET → { identityKey, handle?, paymail? }: restores the signed-in badge on load, no wallet prompt
- *   logout-url    POST on Disconnect (clears the session cookie)
+ *   logout-url    POST on Disconnect (clears the session cookie). REQUIRED with verify-url (0.7.0): "Not you?" and
+ *                 Disconnect end a session the verify route created through it (a dev console.warn when missing)
  *   lookup-url    paymail lookup by key for the badge. Default pay.bwallet.space; "off" to skip
  *   stateless     keep the pre-0.5.5 behaviour: a plain button that never shows the signed-in badge
  *   state         drive it yourself (BwalletxSignin inside BwalletXProvider does): signed-out | restoring | pending |
@@ -79,7 +80,7 @@ import { accountLabel, avatarUrlFor, copyText, lookupPaymail, rememberIdentity, 
 import { runSilentMetanet } from './connect-flow.js';
 import {
   metanetOffered, metanetOption, rememberKnownIdentityKey, silentAttemptUsed, METANET_LABEL, METANET_NOTE, METANET_REMEMBERED_NOTE,
-  METANET_OPTION_ID, METANET_TYPE, NOT_YOU_LABEL,
+  METANET_OPTION_ID, METANET_TYPE, NOT_YOU_LABEL, warnIfNoLogout,
 } from './metanet.js';
 
 export const SIGNIN_TAG = 'bwalletx-signin';
@@ -308,6 +309,7 @@ function createClass(): CustomElementConstructor {
     }
 
     connectedCallback() {
+      if (!this.#controlled && this.#stateful) warnIfNoLogout({ verifyUrl: this.#attr('verify-url'), logoutUrl: this.#attr('logout-url'), where: '<bwalletx-signin>' });
       this.#render();
       void this.#restore().then(() => this.#silentMetanet());
     }
@@ -734,7 +736,8 @@ function createClass(): CustomElementConstructor {
 
     /**
      * Signed in: note the wallet type, and remember it for this origin when the user picked it (0.6.0), plus the
-     * identity key as known here (0.7.0, public keys only: Metanet's silent attempt goes on only for these).
+     * identity key as known here (0.7.0, public keys only: Metanet's silent attempt goes on only for these). Pass a key
+     * only after the site's verify route accepted it.
      */
     #picked(option: WalletOption, reason: ChoiceReason, identityKey?: string | null) {
       this.#signedType = walletTypeOf(option);
@@ -849,7 +852,8 @@ function createClass(): CustomElementConstructor {
               challenge: (identityKey) => postJson<AccessChallengeLike>(challengeUrl, { identityKey, require: hint }),
               verify: verifyUrl ? (response) => postAccess(verifyUrl, response) : undefined,
             });
-            this.#picked(option, reason, a.response.identityKey);
+            // Known only when the site's verify route checked the proof (verify-url).
+            this.#picked(option, reason, verifyUrl ? a.response.identityKey : null);
             this.#attempt(option, 'signed-in', started);
             this.#emit('bwalletx-access-granted', { identityKey: a.response.identityKey, response: a.verified });
           } catch (e) {
@@ -879,7 +883,8 @@ function createClass(): CustomElementConstructor {
         }
         if (verifyUrl) rememberIdentity(r.identityKey);
         const response = verifyUrl ? (verified as { handle?: string; paymail?: string }) : null;
-        this.#picked(option, reason, r.identityKey);
+        // Known only when the site's verify route accepted the signature (verify-url); without it nothing was proved.
+        this.#picked(option, reason, verifyUrl ? r.identityKey : null);
         if (own) this.#signedIn({ identityKey: r.identityKey, handle: response?.handle ?? null, paymail: response?.paymail ?? null });
         this.#attempt(option, 'signed-in', started);
         this.#emit('bwalletx-signed-in', { identityKey: r.identityKey, method, nonce: r.nonce, signature: r.signature, response });

@@ -58,7 +58,7 @@ export interface PayResult {
 export type PaymentErrorCode = 'BAD_REQUEST' | 'RESOLVE_FAILED' | 'RATE_FAILED' | 'WALLET_REJECTED' | 'WALLET_ERROR' | 'NOT_SUPPORTED' | 'INSUFFICIENT_FUNDS';
 
 /** (0.7.0) The plain message for a wallet with no coins for the network fee (PaymentError code INSUFFICIENT_FUNDS). */
-export const NO_COINS_TEXT = 'Your wallet has no coins to pay the small network fee. Add a few pence and try again.';
+export const NO_COINS_TEXT = "Your wallet doesn't have enough to cover this payment and its small network fee. Add a little and try again.";
 
 /**
  * True when createAction failed because the wallet has no coins (or too few) to fund it: the SDK's

@@ -242,3 +242,37 @@ export async function trySilentMetanet(o: MetanetOptions & { windowMs?: number }
   clearTimeout(timer);
   return r;
 }
+
+/* ---------------------------------------------------------------------------------------------------------------
+ * logoutUrl is required with verifyUrl.
+ * ------------------------------------------------------------------------------------------------------------- */
+
+let warnedLogout = false;
+
+const isProduction = (): boolean => {
+  try {
+    return (globalThis as { process?: { env?: { NODE_ENV?: string } } }).process?.env?.NODE_ENV === 'production';
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * (0.7.0) A sign-in with a verify route and no logout route: "Not you?" (and Disconnect) cannot end a session the
+ * verify route already set, so the person stays signed in as the key they just rejected. Warns once per page, in
+ * development only. Returns true when it warned.
+ */
+export function warnIfNoLogout(o: { verifyUrl?: string | null; logoutUrl?: string | null; where: string }): boolean {
+  if (!o.verifyUrl || o.logoutUrl || warnedLogout || isProduction() || typeof console === 'undefined') return false;
+  warnedLogout = true;
+  console.warn(
+    `@bwalletx/connect: ${o.where} has a verify URL but no logout URL. Set it: "Not you? Use another wallet" and ` +
+      'Disconnect must be able to end a session the verify route created.',
+  );
+  return true;
+}
+
+/** Tests only. */
+export function resetLogoutWarning(): void {
+  warnedLogout = false;
+}

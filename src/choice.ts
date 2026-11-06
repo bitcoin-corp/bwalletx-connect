@@ -17,7 +17,7 @@
  */
 import { RDNS_EXTENSION, RDNS_MOBILE } from './discover.js';
 import { isUserRejection } from './account.js';
-import { autoChoice, desktopOption, discoverWallets, DESKTOP_OPTION_ID, type Substrate, type WalletOption } from './wallets.js';
+import { autoChoice, discoverWallets, isLocalDesktop, DESKTOP_OPTION_ID, type Substrate, type WalletOption } from './wallets.js';
 import { METANET_TYPE, metanetOffered } from './metanet.js';
 
 /** The wallet type every bWalletX (extension, in-app, app frame, phone) reports. */
@@ -240,26 +240,27 @@ export function needsBwalletX(type: string | null | undefined): boolean {
  * wallet", the Switch note). Never for Metanet: the button never picks it (it has its own link and "Not you?").
  */
 export function tapGoesElsewhere(type: string | null | undefined): boolean {
-  return needsBwalletX(type) && type !== METANET_TYPE;
+  return needsBwalletX(type) && type !== METANET_TYPE && type !== DESKTOP_OPTION_ID;
+}
+
+/** (0.7.0) A remembered desktop wallet on localhost (Metanet, 'desktop', json-api, cicada): never the button's pick. */
+export function isLocalDesktopType(r: RememberedWallet): boolean {
+  return r.type === METANET_TYPE || r.type === DESKTOP_OPTION_ID || r.substrate === 'json-api' || r.substrate === 'cicada';
 }
 
 /**
  * The option in `list` for a remembered wallet, or null when it isn't here. bWalletX counts only by its own marker
- * (or the phone, when the phone was picked). A remembered desktop wallet gives desktopOption(): it looks on localhost
- * only when connected, i.e. after the tap.
+ * (or the phone, when the phone was picked). A remembered desktop wallet on localhost (Metanet / 'desktop') gives null
+ * (0.7.0): the button never picks it; its own link does.
  */
 export function matchRemembered(list: readonly WalletOption[], r: RememberedWallet): WalletOption | null {
-  // 0.7.0: the button's discovery NEVER picks Metanet (owner rule 1). Its own tap, or the silent attempt, reaches it.
-  if (r.type === METANET_TYPE) return null;
+  // 0.7.0: the button's discovery NEVER picks Metanet (owner rule 1), nor any desktop wallet on localhost ('desktop',
+  // json-api, cicada: that is Metanet on :3321 too). Its own tap, or the silent attempt, reaches it.
+  if (isLocalDesktopType(r)) return null;
   if (r.type === BWALLETX_TYPE) {
     return (r.substrate === 'pairing' ? list.find((o) => o.kind === 'pairing') : list.find(isPresentBwalletX)) ?? null;
   }
-  const m = list.find((o) => !o.isBwalletX && isRememberable(o) && walletTypeOf(o) === r.type);
-  if (m) return m;
-  if (r.type === DESKTOP_OPTION_ID || r.substrate === 'json-api' || r.substrate === 'cicada') {
-    return list.find((o) => o.substrate === 'json-api' || o.substrate === 'cicada') ?? desktopOption();
-  }
-  return null;
+  return list.find((o) => !o.isBwalletX && !isLocalDesktop(o) && isRememberable(o) && walletTypeOf(o) === r.type) ?? null;
 }
 
 /**
@@ -295,6 +296,8 @@ export function planAutoConnect(o: {
   if (r.type === METANET_TYPE) {
     return { action: (o.metanetHere ?? metanetOffered()) ? 'silent-metanet' : 'none', remembered: r, needsBwalletX: false };
   }
+  // A remembered 0.6.0 "Desktop wallet" is Metanet on :3321 too: never picked by the button, never tried silently.
+  if (isLocalDesktopType(r)) return { action: 'none', remembered: r, needsBwalletX: false };
   const action: AutoConnectAction = o.signedIn && ATTACHABLE.includes(r.substrate) ? 'attach' : 'wait-for-tap';
   return { action, remembered: r, needsBwalletX: needsBwalletX(r.type) };
 }
