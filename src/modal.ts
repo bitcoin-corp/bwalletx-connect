@@ -4,9 +4,13 @@
  */
 import qrcode from 'qrcode-generator';
 import type { PairingOptions } from './pair.js';
-import { desktopOption, type WalletOption } from './wallets.js';
+import type { WalletOption } from './wallets.js';
+import { metanetOffered, metanetOption, METANET_NOTE } from './metanet.js';
 import { GET_URL, WEB_WALLET_URL, markSvg } from './element.js';
 import { chooserOrder, hasBwalletX, isPresentBwalletX, otherDetected } from './choice.js';
+import { isTouchDevice } from './device.js';
+
+export { isTouchDevice };
 
 const CSS = `
 .bwx-ov{position:fixed;inset:0;z-index:2147483000;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:16px;font:15px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
@@ -71,23 +75,6 @@ export function qrSvg(text: string): string {
   return q.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
 }
 
-
-/**
- * True on a phone or tablet: a coarse pointer with no hover, or a mobile user agent (iPadOS reports
- * a Mac UA, so touch points count too). Scanning a QR shown on the same screen is impossible there.
- */
-export function isTouchDevice(env: { navigator?: Navigator; matchMedia?: (q: string) => MediaQueryList } = globalThis as never): boolean {
-  const nav = env.navigator;
-  if (!nav) return false;
-  const ua = nav.userAgent ?? '';
-  if (/Android|iPhone|iPad|iPod|Mobile|Silk|Kindle/i.test(ua)) return true;
-  if (/Macintosh/.test(ua) && (nav.maxTouchPoints ?? 0) > 1) return true;
-  try {
-    return !!env.matchMedia?.('(pointer: coarse)').matches && !env.matchMedia?.('(hover: hover)').matches;
-  } catch {
-    return false;
-  }
-}
 
 export interface PairingModalOptions {
   title?: string;
@@ -208,8 +195,9 @@ export interface ChooseWalletOptions {
   /** Where "Get bWalletX" points. Default https://bwalletx.com/get */
   getUrl?: string;
   /**
-   * Offer "Desktop wallet" (Metanet / BSV Desktop on localhost). Default true. It probes localhost only when tapped
-   * (desktopOption), never while the chooser opens.
+   * Offer "Use Metanet Desktop or another BRC-100 wallet" (0.7.0; was "Desktop wallet"). Default true. It calls
+   * localhost:3321 only when tapped (metanetOption), never while the chooser opens, and is never shown on a phone or
+   * inside a frame.
    */
   desktop?: boolean;
 }
@@ -240,8 +228,8 @@ function optionRow(w: WalletOption, primary: boolean, sub?: string, tag?: string
 
 /**
  * The wallet chooser (0.5.6). Without bWalletX in this browser, "Get bWalletX" comes first; then bWalletX on the
- * phone, the other wallets that were detected, "Desktop wallet" (probes localhost only when tapped) and app-supplied
- * options. Opened from "Other wallets" while bWalletX is here, bWalletX is the first, gold row.
+ * phone, the other wallets that were detected, "Use Metanet Desktop or another BRC-100 wallet" (0.7.0: localhost:3321
+ * only when tapped; computers only) and app-supplied options. Opened from "Other wallets" while bWalletX is here, bWalletX is the first, gold row.
  * Resolves with the chosen option, or null when closed. "Get bWalletX" is a link and leaves the chooser open.
  */
 export function chooseWallet(options: readonly WalletOption[], o: ChooseWalletOptions = {}): Promise<WalletOption | null> {
@@ -297,10 +285,11 @@ export function chooseWallet(options: readonly WalletOption[], o: ChooseWalletOp
       row.onclick = () => done(w);
       list.append(row);
     }
-    if (o.desktop !== false && !options.some((w) => w.substrate === 'json-api' || w.substrate === 'cicada')) {
+    if (o.desktop !== false && metanetOffered() && !options.some((w) => w.substrate === 'json-api' || w.substrate === 'cicada')) {
       if (!here && !sep) list.append(el('p', 'bwx-sep', 'Or use'));
-      const d = desktopOption();
-      const row = optionRow(d, false, 'Metanet or BSV Desktop on this computer', 'Fewer features');
+      const d = metanetOption();
+      const row = optionRow(d, false, METANET_NOTE);
+      row.title = 'Connects to Metanet Desktop on this computer, never to a browser extension.';
       row.onclick = () => done(d);
       list.append(row);
     }

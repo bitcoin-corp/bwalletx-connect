@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.7.0 (unreleased)
+
+**Use Metanet Desktop or another BRC-100 wallet** (owner, 6 Nov 2026: "ship a new one now with the metanet option"), with the rules of the live bChatX door (bit-sign 73f7d644).
+
+- **An explicit, visible choice.** "Use Metanet Desktop or another BRC-100 wallet · Metanet Desktop must be running on this computer": a link under `<bwalletx-signin>` (lg/md; `metanet="auto|on|off"`, React `metanet`), the chooser row that replaces "Desktop wallet", `useBwalletX().connectMetanet()` / `connect({ metanet: true })`, `runConnect({ metanet: true })`, `metanetOption()`. Pinned to `WalletClient('json-api')` on localhost:3321, never `'auto'`; it calls :3321 only after its own tap (getVersion first, so "nothing there" says "We couldn’t reach Metanet Desktop. Open it, then try again.").
+- **bWalletX stays the default.** The button's discovery never picks Metanet, even when it is the remembered wallet (`matchRemembered` → null); a remembered Metanet shows no "Continue with your wallet" or Switch note (`tapGoesElsewhere`).
+- **Remembered:** the type (`bwx:wallet = { type: 'metanet', substrate: 'json-api' }`) and the identity keys known on this origin (`bwx:known-keys`, public keys, newest 8; `knownIdentityKeys`, `isKnownIdentityKey`, `rememberKnownIdentityKey`). Every successful connect or sign-in adds its key.
+- **Return visit:** `planAutoConnect` → `'silent-metanet'`; ONE silent attempt per page load, 2 s (`trySilentMetanet`, `runSilentMetanet`), only for a key already known here; a locked, slow, absent or unknown wallet stops silently (no banner, no retry, no unlock prompt). With a session it attaches only the session's key. The element and the provider both run it.
+- **"Not you? Use another wallet"** under the button while Metanet is remembered (element `notYou()`, event `bwalletx-not-you`, `useBwalletX().forgetWallet()`), and Disconnect, forget the choice; a sign-in dropped mid-way lands nobody.
+- **Computers only**, never in a frame (`metanetOffered()`, `inAnyFrame()`); the chooser row is hidden there too.
+- **The minimum asked:** getVersion, isAuthenticated, the identity key, then the site's own call (the sign-in signature), one at a time; no protocol permission requests at connect.
+- **No coins:** a `createAction` that fails for lack of funds throws `PaymentError` `INSUFFICIENT_FUNDS` (`maybeSent: false`) with "Your wallet has no coins to pay the small network fee. Add a few pence and try again." (`NO_COINS_TEXT`, `isInsufficientFunds`).
+- `isTouchDevice` moved to its own module (still exported from the package root and `modal`).
+
 ## 0.6.0 (unreleased)
 
 Auto-connect for returning visitors (RB, 5 Nov 2026: "go on auto-connect"), within the wallet-choice rules of 0.5.6.

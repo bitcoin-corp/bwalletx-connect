@@ -52,6 +52,8 @@ export function isUserRejection(e: unknown): boolean {
 /** One plain line for an error: "Sign-in cancelled" for a no in the wallet, otherwise the gist. */
 export function signInErrorText(e: unknown): string {
   if (isUserRejection(e)) return 'Sign-in cancelled';
+  // 0.7.0: the Metanet option says the one thing to fix ("Open it, then try again").
+  if ((e as { name?: unknown } | null)?.name === 'MetanetUnreachableError') return (e as Error).message;
   const code = (e as { code?: unknown } | null)?.code;
   if (code === 'NOT_FOUND') return 'bWalletX was not found in this browser';
   const msg = e instanceof Error ? e.message : String(e ?? '');

@@ -6,6 +6,9 @@ import { rememberIdentity, rememberedIdentity } from './account.js';
 import { signInAndVerify, type Challenge } from './signin.js';
 import type { ConnectedWallet, Substrate, WalletOption } from './wallets.js';
 import {
+  isKnownIdentityKey, metanetOffered, metanetOption, rememberKnownIdentityKey, trySilentMetanet, METANET_OPTION_ID, type MetanetOptions,
+} from './metanet.js';
+import {
   attemptFor, decideWallet, isExplicitPick, outcomeOf, rememberWalletChoice, reportAttempt, substrateOf, walletTypeOf,
   type AttemptHook, type ChoiceReason, type RememberedWallet,
 } from './choice.js';
@@ -33,6 +36,11 @@ export interface ConnectFlowOptions {
   remember?: boolean;
   /** (0.6.0) "Switch" to bWalletX: ignore a remembered other wallet (bWalletX here, else the chooser). */
   preferBwalletX?: boolean;
+  /**
+   * (0.7.0) The user tapped "Use Metanet Desktop or another BRC-100 wallet": connect to localhost:3321 (pinned
+   * 'json-api', never 'auto'), with no chooser. Rejects NOT_SUPPORTED on a phone or inside a frame.
+   */
+  metanet?: boolean | MetanetOptions;
   /** Show the chooser; resolves null when closed. chooseWallet (modal.ts) or your own UI. */
   pick: (list: WalletOption[]) => Promise<WalletOption | null>;
   /** With verifyUrl: sign in after connecting. */
@@ -65,6 +73,12 @@ export async function runConnect(o: ConnectFlowOptions): Promise<ConnectFlowResu
   let choice: WalletOption | null = null;
   let reason: ChoiceReason = 'none';
   try {
+    if (o.metanet) {
+      if (!metanetOffered()) throw Object.assign(new Error('Metanet Desktop runs on a computer, outside any frame.'), { code: 'NOT_SUPPORTED' });
+      choice = metanetOption(typeof o.metanet === 'object' ? o.metanet : {});
+      reason = 'requested';
+      return await finish(o, choice, reason, started);
+    }
     const d = decideWallet(list, {
       walletId: o.walletId,
       chooser: o.chooser,
@@ -81,36 +95,108 @@ export async function runConnect(o: ConnectFlowOptions): Promise<ConnectFlowResu
       reportAttempt(o.onAttempt, attemptFor(null, 'cancelled', started));
       return null;
     }
-    const signIn = !!(o.challengeUrl && o.verifyUrl) && choice.kind !== 'handcash';
-    // Signing in: open the wallet WITHOUT asking for the key; the key comes with the signature, in one sheet.
-    const cw = await choice.connect(signIn ? { identity: false } : undefined);
-    let handle = cw.handle ?? null;
-    let paymail = cw.paymail ?? null;
-    let identityKey = cw.identityKey;
-    let signedIn = false;
-    if (cw.wallet && signIn) {
-      const { result, verified } = await signInAndVerify({
-        wallet: cw.wallet,
-        identityKey: cw.identityKey ?? undefined,
-        // The key that signed in here last time: a repeat sign-in is then the signature alone.
-        identityKeyHint: rememberedIdentity(),
-        challengeNeedsIdentityKey: o.challengeNeedsIdentityKey,
-        challenge: (key) => o.post(o.challengeUrl!, key ? { identityKey: key } : {}) as unknown as Promise<Challenge>,
-        verify: (r) => o.post(o.verifyUrl!, { identityKey: r.identityKey, nonce: r.nonce, signature: r.signature }),
-      });
-      rememberIdentity(result.identityKey);
-      identityKey = result.identityKey;
-      handle = (verified.handle as string | undefined) ?? handle;
-      paymail = (verified.paymail as string | undefined) ?? paymail;
-      signedIn = true;
-    } else if (cw.wallet && !identityKey) {
-      identityKey = (await cw.wallet.getPublicKey({ identityKey: true })).publicKey;
-    }
-    if (o.remember && isExplicitPick(choice, reason)) rememberWalletChoice(choice);
-    reportAttempt(o.onAttempt, attemptFor(choice, signedIn ? 'signed-in' : 'connected', started));
-    return { connected: cw, identityKey, handle, paymail, signedIn, walletType: walletTypeOf(choice), substrate: substrateOf(choice), reason };
+    return await finish(o, choice, reason, started);
   } catch (e) {
     reportAttempt(o.onAttempt, attemptFor(choice, outcomeOf(e), started));
     throw e;
+  }
+}
+
+/** Open the chosen wallet and sign in (one wallet sheet), remember the pick, report the attempt. */
+async function finish(o: ConnectFlowOptions, choice: WalletOption, reason: ChoiceReason, started: number): Promise<ConnectFlowResult> {
+  const signIn = !!(o.challengeUrl && o.verifyUrl) && choice.kind !== 'handcash';
+  // Signing in: open the wallet WITHOUT asking for the key; the key comes with the signature, in one sheet.
+  const cw = await choice.connect(signIn ? { identity: false } : undefined);
+  let handle = cw.handle ?? null;
+  let paymail = cw.paymail ?? null;
+  let identityKey = cw.identityKey;
+  let signedIn = false;
+  if (cw.wallet && signIn) {
+    const { result, verified } = await signInAndVerify({
+      wallet: cw.wallet,
+      identityKey: cw.identityKey ?? undefined,
+      // Metanet's connect() just checked the lock: don't ask again (rule 7, the minimum).
+      skipWaitForAuthentication: choice.id === METANET_OPTION_ID,
+      // The key that signed in here last time: a repeat sign-in is then the signature alone.
+      identityKeyHint: rememberedIdentity(),
+      challengeNeedsIdentityKey: o.challengeNeedsIdentityKey,
+      challenge: (key) => o.post(o.challengeUrl!, key ? { identityKey: key } : {}) as unknown as Promise<Challenge>,
+      verify: (r) => o.post(o.verifyUrl!, { identityKey: r.identityKey, nonce: r.nonce, signature: r.signature }),
+    });
+    rememberIdentity(result.identityKey);
+    identityKey = result.identityKey;
+    handle = (verified.handle as string | undefined) ?? handle;
+    paymail = (verified.paymail as string | undefined) ?? paymail;
+    signedIn = true;
+  } else if (cw.wallet && !identityKey) {
+    identityKey = (await cw.wallet.getPublicKey({ identityKey: true })).publicKey;
+  }
+  if (o.remember && isExplicitPick(choice, reason)) rememberWalletChoice(choice);
+  // 0.7.0: the identity keys known on this origin (public keys), for Metanet's known-key-only silent attempt.
+  if (o.remember) rememberKnownIdentityKey(identityKey);
+  reportAttempt(o.onAttempt, attemptFor(choice, signedIn ? 'signed-in' : 'connected', started));
+  return { connected: cw, identityKey, handle, paymail, signedIn, walletType: walletTypeOf(choice), substrate: substrateOf(choice), reason };
+}
+
+export interface SilentMetanetOptions extends MetanetOptions {
+  /** With verifyUrl: sign in once the known key is confirmed (the signature alone; the key is already in hand). */
+  challengeUrl?: string;
+  verifyUrl?: string;
+  post?: (url: string, body: unknown) => Promise<Record<string, unknown>>;
+  /** A server session is already in place for this identity key: attach the wallet only if it is the same key. */
+  sessionKey?: string | null;
+  /** The silent window, ms. Default METANET_SILENT_MS (2 s). */
+  windowMs?: number;
+  /** Called when the known key is confirmed and the sign-in signature is about to be asked for. */
+  onSignIn?: () => void;
+  /** "Not you?" was pressed meanwhile: land nobody (and end a session the verify route already set, via `logout`). */
+  isAbandoned?: () => boolean;
+  logout?: () => Promise<unknown>;
+  onAttempt?: AttemptHook;
+}
+
+/**
+ * (0.7.0) The return visit with Metanet remembered: ONE silent attempt per page load (trySilentMetanet: 2 s, known
+ * identity keys only), then, with a session already there, attach the wallet when it is the session's key; without
+ * one, sign in with the signature alone. Resolves null on any stop or failure, and never throws: the caller shows
+ * the normal choice and waits for a tap, with no error.
+ */
+export async function runSilentMetanet(o: SilentMetanetOptions = {}): Promise<ConnectFlowResult | null> {
+  const s = await trySilentMetanet(o);
+  if (!s.ok || o.isAbandoned?.()) return null;
+  const started = Date.now();
+  const opt = metanetOption(o);
+  opt.wallet = s.wallet;
+  const cw: ConnectedWallet = { wallet: s.wallet, payer: s.wallet, identityKey: s.identityKey, optionId: METANET_OPTION_ID, kind: 'brc100' };
+  const done = (signedIn: boolean, handle: string | null = null, paymail: string | null = null): ConnectFlowResult => {
+    rememberWalletChoice(opt);
+    rememberKnownIdentityKey(s.identityKey);
+    reportAttempt(o.onAttempt, attemptFor(opt, signedIn ? 'signed-in' : 'connected', started));
+    return { connected: cw, identityKey: s.identityKey, handle, paymail, signedIn, walletType: walletTypeOf(opt), substrate: 'json-api', reason: 'remembered' };
+  };
+  if (o.sessionKey !== undefined && o.sessionKey !== null) {
+    return o.sessionKey.toLowerCase() === s.identityKey.toLowerCase() ? done(true) : null;
+  }
+  if (!o.challengeUrl || !o.verifyUrl || !o.post) return done(false);
+  if (!isKnownIdentityKey(s.identityKey)) return null;
+  try {
+    o.onSignIn?.();
+    const post = o.post;
+    const { result, verified } = await signInAndVerify({
+      wallet: s.wallet,
+      identityKey: s.identityKey,
+      skipWaitForAuthentication: true, // trySilentMetanet just saw it unlocked
+      challenge: (key) => post(o.challengeUrl!, key ? { identityKey: key } : {}) as unknown as Promise<Challenge>,
+      verify: (r) => post(o.verifyUrl!, { identityKey: r.identityKey, nonce: r.nonce, signature: r.signature }),
+    });
+    if (o.isAbandoned?.()) {
+      await Promise.resolve(o.logout?.()).catch(() => undefined);
+      return null;
+    }
+    rememberIdentity(result.identityKey);
+    return done(true, (verified.handle as string | undefined) ?? null, (verified.paymail as string | undefined) ?? null);
+  } catch (e) {
+    reportAttempt(o.onAttempt, attemptFor(opt, outcomeOf(e), started));
+    return null;
   }
 }

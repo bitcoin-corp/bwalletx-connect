@@ -22,7 +22,8 @@ import {
 import type { WalletInterface } from '@bsv/sdk';
 import { clearPairing } from './pair.js';
 import { declareWalletTheme } from './theme.js';
-import { runConnect } from './connect-flow.js';
+import { runConnect, runSilentMetanet } from './connect-flow.js';
+import { metanetOffered, silentAttemptUsed, METANET_TYPE } from './metanet.js';
 import { chooseWallet, pairingModal, pickWallet } from './modal.js';
 import {
   attachRemembered, forgetWalletChoice, needsBwalletX, planAutoConnect, rememberedWalletChoice, walletTypeOf,
@@ -63,6 +64,11 @@ export interface BwalletxSigninProps {
   discoverMs?: number;
   /** "Other wallets" link under the button: 'auto' (default: lg/md), 'on' or 'off'. */
   otherWallets?: 'auto' | 'on' | 'off';
+  /**
+   * (0.7.0) "Use Metanet Desktop or another BRC-100 wallet" under the button: 'auto' (default: lg/md on a computer,
+   * outside any frame), 'on' or 'off'. Connects to localhost:3321 on its own tap only.
+   */
+  metanet?: 'auto' | 'on' | 'off';
   /** Without a provider: GET → { identityKey, handle?, paymail? } restores the signed-in badge on load. */
   sessionUrl?: string;
   /** Without a provider: POST on Disconnect. */
@@ -121,7 +127,7 @@ export function BwalletxSignin(props: BwalletxSigninProps): ReactElement {
           if (!e.defaultPrevented && c && cb.current.stateful !== false) {
             e.preventDefault();
             const mode = (e as CustomEvent<{ mode?: SigninMode }>).detail?.mode;
-            c.connect(mode === 'chooser' ? { chooser: true } : mode === 'bwalletx' ? { bwalletx: true } : {}).catch(() => undefined);
+            c.connect(mode === 'chooser' ? { chooser: true } : mode === 'bwalletx' ? { bwalletx: true } : mode === 'metanet' ? { metanet: true } : {}).catch(() => undefined);
           }
         },
       ],
@@ -139,6 +145,16 @@ export function BwalletxSignin(props: BwalletxSigninProps): ReactElement {
         },
       ],
       ['bwalletx-signed-out', () => cb.current.onSignedOut?.()],
+      [
+        'bwalletx-not-you',
+        (e) => {
+          const c = ctxRef.current;
+          if (c && cb.current.stateful !== false) {
+            e.preventDefault();
+            c.forgetWallet();
+          }
+        },
+      ],
     ];
     for (const [t, f] of on) el.addEventListener(t, f);
     return () => { for (const [t, f] of on) el.removeEventListener(t, f); };
@@ -181,6 +197,7 @@ export function BwalletxSignin(props: BwalletxSigninProps): ReactElement {
     scope: p.scope,
     'discover-ms': p.discoverMs,
     'other-wallets': p.otherWallets,
+    metanet: p.metanet,
     'wallet-type': driven ? (ctx.walletType ?? ctx.rememberedWallet?.type ?? undefined) : undefined,
     'aria-label': p['aria-label'],
   });
@@ -205,6 +222,8 @@ export interface BwalletXState {
   rememberedWallet: RememberedWallet | null;
   /** (0.6.0) The connected (or remembered) wallet isn't bWalletX: show "Some features need bWalletX · Switch". */
   needsBwalletX: boolean;
+  /** (0.7.0) "Use Metanet Desktop or another BRC-100 wallet" is offered here (a computer, outside any frame). */
+  metanetOffered: boolean;
   /** True while the transitional HandCash adapter is in use. */
   transitional: boolean;
   /** The server session (verifyUrl/sessionUrl) is in place. */
@@ -218,9 +237,19 @@ export interface BwalletXContextValue extends BwalletXState {
    * without it the chooser opens with "Get bWalletX" first. `chooser: true` is the "Other wallets" link: the chooser
    * even when bWalletX is here.
    */
-  connect(opts?: { walletId?: string; chooser?: boolean; bwalletx?: boolean }): Promise<ConnectedWallet | null>;
+  connect(opts?: { walletId?: string; chooser?: boolean; bwalletx?: boolean; metanet?: boolean }): Promise<ConnectedWallet | null>;
   /** (0.6.0) "Switch": sign in with bWalletX (straight to it when here, else the chooser with Get bWalletX first). */
   switchToBwalletX(): Promise<ConnectedWallet | null>;
+  /**
+   * (0.7.0) "Use Metanet Desktop or another BRC-100 wallet": connect to localhost:3321 (pinned json-api) and sign in.
+   * Call it from the user's tap only.
+   */
+  connectMetanet(): Promise<ConnectedWallet | null>;
+  /**
+   * (0.7.0) "Not you? Use another wallet": forget the wallet remembered on this origin and drop a silent Metanet
+   * sign-in in flight (a session its verify already set is ended through logoutUrl).
+   */
+  forgetWallet(): void;
   disconnect(): Promise<void>;
   /** The wallets found on the last connect() (or listWallets()). */
   wallets: WalletOption[];
@@ -292,7 +321,7 @@ export interface BwalletXProviderProps {
 
 const empty: BwalletXState = {
   status: 'idle', identityKey: null, handle: null, paymail: null, wallet: null, walletId: null, walletType: null, transitional: false, signedIn: false, error: null,
-  rememberedWallet: null, needsBwalletX: false,
+  rememberedWallet: null, needsBwalletX: false, metanetOffered: false,
 };
 
 const Ctx = createContext<BwalletXContextValue | null>(null);
@@ -307,6 +336,12 @@ async function postJson(url: string, body: unknown): Promise<Record<string, unkn
 /** Holds the connected wallet and session for the tree. Renders nothing itself; SSR-safe. */
 export function BwalletXProvider(p: BwalletXProviderProps): ReactElement {
   const [state, setState] = useState<BwalletXState>(empty);
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  /** (0.7.0) Bumped by forgetWallet ("Not you?") and disconnect: a silent Metanet sign-in started before lands nobody. */
+  const silentRun = useRef(0);
+  /** The session check (sessionUrl) has answered, so the silent attempt knows whether a session is there. */
+  const sessionChecked = useRef(!p.sessionUrl);
   const [wallets, setWallets] = useState<WalletOption[]>([]);
   const props = useRef(p);
   props.current = p;
@@ -335,13 +370,18 @@ export function BwalletXProvider(p: BwalletXProviderProps): ReactElement {
       .then((r) => r.json())
       .then((j: { identityKey?: string | null; handle?: string; paymail?: string }) => {
         if (!live) return;
+        sessionChecked.current = true;
         setState((s) =>
           j.identityKey
             ? { ...s, status: 'connected', identityKey: j.identityKey, handle: j.handle ?? null, paymail: j.paymail ?? null, signedIn: true }
             : { ...s, status: s.status === 'restoring' ? 'idle' : s.status },
         );
       })
-      .catch(() => live && setState((s) => ({ ...s, status: s.status === 'restoring' ? 'idle' : s.status })));
+      .catch(() => {
+        if (!live) return;
+        sessionChecked.current = true;
+        setState((s) => ({ ...s, status: s.status === 'restoring' ? 'idle' : s.status }));
+      });
     return () => {
       live = false;
     };
@@ -360,11 +400,11 @@ export function BwalletXProvider(p: BwalletXProviderProps): ReactElement {
   }, []);
 
   const connect = useCallback(
-    async (opts: { walletId?: string; chooser?: boolean; bwalletx?: boolean } = {}) => {
+    async (opts: { walletId?: string; chooser?: boolean; bwalletx?: boolean; metanet?: boolean } = {}) => {
       const c = props.current;
       setState((s) => ({ ...s, status: 'connecting', error: null }));
       try {
-        const list = await listWallets();
+        const list = opts.metanet ? [] : await listWallets();
         const fast = c.fastPath !== false;
         const r = await runConnect({
           list,
@@ -377,6 +417,7 @@ export function BwalletXProvider(p: BwalletXProviderProps): ReactElement {
           remembered: fast && c.rememberChoice !== false ? rememberedWalletChoice() : null,
           remember: fast && c.rememberChoice !== false,
           preferBwalletX: opts.bwalletx,
+          metanet: opts.metanet,
           challengeUrl: c.challengeUrl,
           verifyUrl: c.verifyUrl,
           challengeNeedsIdentityKey: c.challengeNeedsIdentityKey,
@@ -401,6 +442,7 @@ export function BwalletXProvider(p: BwalletXProviderProps): ReactElement {
           error: null,
           rememberedWallet: c.rememberChoice !== false ? rememberedWalletChoice() : null,
           needsBwalletX: needsBwalletX(r.walletType),
+          metanetOffered: metanetOffered(),
         });
         return { ...cw, identityKey: r.identityKey, handle: r.handle ?? undefined, paymail: r.paymail ?? undefined };
       } catch (e) {
@@ -420,17 +462,33 @@ export function BwalletXProvider(p: BwalletXProviderProps): ReactElement {
     if (state.walletId === 'bwalletx-pairing') await clearPairing();
     // A Disconnect means "don't connect me automatically": the remembered wallet goes too.
     if (c.rememberChoice !== false) forgetWalletChoice();
+    silentRun.current++;
     payer.current = null;
-    setState(empty);
+    setState({ ...empty, metanetOffered: metanetOffered() });
   }, [state.walletId]);
 
   const switchToBwalletX = useCallback(() => connect({ bwalletx: true }), [connect]);
+  const connectMetanet = useCallback(() => connect({ metanet: true }), [connect]);
+
+  const forgetWallet = useCallback(() => {
+    if (props.current.rememberChoice !== false) forgetWalletChoice();
+    silentRun.current++;
+    setState((s) => ({
+      ...s,
+      rememberedWallet: null,
+      needsBwalletX: s.walletType ? needsBwalletX(s.walletType) : false,
+      // A silent Metanet sign-in on screen goes back to the normal choice.
+      status: s.status === 'connecting' && !s.wallet ? (s.signedIn && s.identityKey ? 'connected' : 'idle') : s.status,
+    }));
+  }, []);
 
   // 0.6.0: the remembered wallet, read after mount (SSR-safe), for the "Switch" note.
   useEffect(() => {
+    setState((s) => (s.metanetOffered === metanetOffered() ? s : { ...s, metanetOffered: metanetOffered() }));
     if (p.rememberChoice === false) return;
     const r = rememberedWalletChoice();
-    if (r) setState((s) => (s.rememberedWallet ? s : { ...s, rememberedWallet: r, needsBwalletX: s.walletType ? s.needsBwalletX : needsBwalletX(r.type) }));
+    // A remembered Metanet isn't where the button's tap goes, so it never shows the Switch note (0.7.0).
+    if (r) setState((s) => (s.rememberedWallet ? s : { ...s, rememberedWallet: r, needsBwalletX: s.walletType ? s.needsBwalletX : needsBwalletX(r.type) && r.type !== METANET_TYPE }));
   }, [p.rememberChoice]);
 
   // 0.6.0 auto-connect: signed in from the session cookie, wallet not attached yet → pick up the remembered wallet by
@@ -455,6 +513,58 @@ export function BwalletXProvider(p: BwalletXProviderProps): ReactElement {
       live = false;
     };
   }, [sessionOnly]);
+
+  // 0.7.0 rule 4: Metanet Desktop remembered here → ONE silent attempt per page load (2 s, a known identity key only).
+  // With a session: attach the wallet if it is the session's key. Without: sign in with the signature alone. Any stop
+  // or failure is silent (no error, no onError, no retry); the normal choice stays and waits for a tap.
+  const silentReady = state.status === 'idle' || sessionOnly;
+  useEffect(() => {
+    const c = props.current;
+    if (!silentReady || !sessionChecked.current || c.autoConnect === false || c.rememberChoice === false || c.fastPath === false || silentAttemptUsed()) return;
+    const plan = planAutoConnect({ remembered: rememberedWalletChoice(), signedIn: sessionOnly });
+    if (plan.action !== 'silent-metanet') return;
+    const run = ++silentRun.current;
+    const live = () => run === silentRun.current;
+    let shown = false;
+    const session = stateRef.current;
+    void runSilentMetanet({
+      sessionKey: sessionOnly ? session.identityKey : null,
+      challengeUrl: c.challengeUrl,
+      verifyUrl: c.verifyUrl,
+      post: postJson,
+      onAttempt: c.onAttempt,
+      isAbandoned: () => !live(),
+      logout: () => (props.current.logoutUrl ? postJson(props.current.logoutUrl, {}) : Promise.resolve()),
+      onSignIn: () => {
+        if (!live()) return;
+        shown = true;
+        setState((s) => (s.status === 'idle' ? { ...s, status: 'connecting', error: null } : s));
+      },
+    }).then((r) => {
+      if (!live()) return;
+      if (!r) {
+        if (shown) setState((s) => (s.status === 'connecting' && !s.wallet ? { ...s, status: s.signedIn && s.identityKey ? 'connected' : 'idle' } : s));
+        return;
+      }
+      const cw = r.connected;
+      payer.current = cw.payer;
+      setState((s) => ({
+        ...s,
+        status: 'connected',
+        identityKey: r.identityKey,
+        handle: r.handle ?? s.handle,
+        paymail: r.paymail ?? s.paymail,
+        wallet: cw.wallet,
+        walletId: cw.optionId,
+        walletType: r.walletType,
+        transitional: false,
+        signedIn: r.signedIn || s.signedIn,
+        error: null,
+        rememberedWallet: rememberedWalletChoice(),
+        needsBwalletX: true,
+      }));
+    });
+  }, [silentReady, sessionOnly]);
 
   // Best-effort paymail for the badge when the server did not send one (pay.bwallet.space lookup by key).
   useEffect(() => {
@@ -481,12 +591,14 @@ export function BwalletXProvider(p: BwalletXProviderProps): ReactElement {
       connect,
       disconnect,
       switchToBwalletX,
+      connectMetanet,
+      forgetWallet,
       listWallets,
       pay: (req) => pay(need(), req, props.current.payOptions),
       tip: (req) => tip(need(), req, props.current.payOptions),
       buyToken: (req) => buyToken(need(), req),
     }),
-    [state, wallets, connect, disconnect, switchToBwalletX, listWallets],
+    [state, wallets, connect, disconnect, switchToBwalletX, connectMetanet, forgetWallet, listWallets],
   );
 
   return createElement(Ctx.Provider, { value }, p.children);

@@ -55,7 +55,24 @@ export interface PayResult {
   remittance?: Brc29Remittance;
 }
 
-export type PaymentErrorCode = 'BAD_REQUEST' | 'RESOLVE_FAILED' | 'RATE_FAILED' | 'WALLET_REJECTED' | 'WALLET_ERROR' | 'NOT_SUPPORTED';
+export type PaymentErrorCode = 'BAD_REQUEST' | 'RESOLVE_FAILED' | 'RATE_FAILED' | 'WALLET_REJECTED' | 'WALLET_ERROR' | 'NOT_SUPPORTED' | 'INSUFFICIENT_FUNDS';
+
+/** (0.7.0) The plain message for a wallet with no coins for the network fee (PaymentError code INSUFFICIENT_FUNDS). */
+export const NO_COINS_TEXT = 'Your wallet has no coins to pay the small network fee. Add a few pence and try again.';
+
+/**
+ * True when createAction failed because the wallet has no coins (or too few) to fund it: the SDK's
+ * WERR_INSUFFICIENT_FUNDS (code 7, also as it arrives from Metanet Desktop over the JSON API), or a wallet's own
+ * "insufficient funds" text. Nothing was sent in that case.
+ */
+export function isInsufficientFunds(e: unknown): boolean {
+  const err = e as { name?: unknown; code?: unknown; isError?: unknown; message?: unknown } | null;
+  if (!err) return false;
+  if (err.name === 'WERR_INSUFFICIENT_FUNDS' || err.code === 'WERR_INSUFFICIENT_FUNDS' || err.code === 'ERR_INSUFFICIENT_FUNDS') return true;
+  if (err.isError === true && err.code === 7) return true;
+  const msg = typeof err.message === 'string' ? err.message : String(e);
+  return /insufficient (funds|balance)|not enough (funds|coins|satoshis|sats)|more satoshis are needed/i.test(msg);
+}
 
 export class PaymentError extends Error {
   constructor(
@@ -172,6 +189,8 @@ async function runAction(wallet: WalletInterface, description: string, outputs: 
       options: { randomizeOutputs: false },
     });
   } catch (e) {
+    // No coins for the fee: one plain line, and nothing was sent (maybeSent false).
+    if (isInsufficientFunds(e)) throw new PaymentError('INSUFFICIENT_FUNDS', NO_COINS_TEXT, false, e);
     const msg = (e as Error)?.message ?? String(e);
     const rejected = /denied|reject|cancel|abort|user/i.test(msg) || (e as { code?: unknown })?.code === 4001;
     // Not retried: a lost reply could mean the wallet already broadcast it.

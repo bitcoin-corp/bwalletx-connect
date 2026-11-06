@@ -27,6 +27,12 @@
  *                 tap goes straight to it. Disconnect forgets it. Nothing fires on load
  *   switch-note   auto (default) | on | off. (0.6.0) "Some features need bWalletX · Switch" under the button when the
  *                 remembered wallet isn't bWalletX (auto: lg/md), and in the signed-in menu
+ *   metanet       auto (default) | on | off. (0.7.0) "Use Metanet Desktop or another BRC-100 wallet · Metanet Desktop
+ *                 must be running on this computer": a link under the button that connects to localhost:3321 (pinned
+ *                 json-api, never 'auto') on its own tap only. auto: lg/md when the element signs in or follows a
+ *                 provider. Never on a phone or inside a frame. With Metanet remembered here, the element makes ONE
+ *                 silent attempt per page load (2 s, identity keys already known here only) and shows "Not you? Use
+ *                 another wallet", which forgets it
  *   wallet-type   (driven by a provider) the connected or remembered wallet type, for the Switch note
  *   session-url   GET → { identityKey, handle?, paymail? }: restores the signed-in badge on load, no wallet prompt
  *   logout-url    POST on Disconnect (clears the session cookie)
@@ -44,7 +50,7 @@
  *
  * Events (bubble, composed):
  *   bwalletx-signin     on every click, before anything else, detail { element, mode } (mode: 'signin',
- *                       'chooser' from "Other wallets", or 'bwalletx' from "Switch"). Cancelable: preventDefault() stops the built-in behaviour so
+ *                       'chooser' from "Other wallets", 'bwalletx' from "Switch", 'metanet' from the Metanet link). Cancelable: preventDefault() stops the built-in behaviour so
  *                       you can run your own flow.
  *   bwalletx-attempt    once per attempt: { walletType, substrate, outcome, ms }. No keys or addresses.
  *   bwalletx-signed-in  detail { identityKey, method, nonce, signature, response }
@@ -53,6 +59,7 @@
  *   bwalletx-disconnect Disconnect chosen in the badge menu. Cancelable: preventDefault() and sign out yourself
  *                       (BwalletXProvider does). Otherwise logout-url is posted and the element shows signed out.
  *   bwalletx-signed-out after the element signed out by itself
+ *   bwalletx-not-you    "Not you? Use another wallet" (0.7.0). Cancelable: BwalletXProvider forgets the choice itself
  *
  * States (one element, the whole experience): signed out (the button) → pending ("Approve in bWalletX…" and one
  * plain line: what signing in shares) → signed in (a badge: bAvatar, $handle or short key, gold dot; its menu has
@@ -62,13 +69,18 @@ import { bindPrewarm, discoverBwalletX, DEFAULT_DISCOVER_MS, RDNS_EXTENSION, RDN
 import { brc100Option, discoverWallets, type WalletOption } from './wallets.js';
 import {
   attemptFor, forgetWalletChoice, hasBwalletX, isExplicitPick, matchRemembered, needsBwalletX, otherDetected, outcomeOf,
-  rememberWalletChoice, rememberedWalletChoice, substrateOf, walletTypeOf, BWALLETX_TYPE, type AttemptOutcome, type ChoiceReason,
+  rememberWalletChoice, rememberedWalletChoice, substrateOf, tapGoesElsewhere, walletTypeOf, BWALLETX_TYPE, type AttemptOutcome, type ChoiceReason,
 } from './choice.js';
 import { chooseWallet, pairingModal } from './modal.js';
 import { signInAndVerify, type Challenge } from './signin.js';
 import { requestAccess, type AccessChallengeLike } from './access-client.js';
 import { AccessError } from './access.js';
 import { accountLabel, avatarUrlFor, copyText, lookupPaymail, rememberIdentity, rememberedIdentity, signInErrorText } from './account.js';
+import { runSilentMetanet } from './connect-flow.js';
+import {
+  metanetOffered, metanetOption, rememberKnownIdentityKey, silentAttemptUsed, METANET_LABEL, METANET_NOTE, METANET_REMEMBERED_NOTE,
+  METANET_OPTION_ID, METANET_TYPE, NOT_YOU_LABEL,
+} from './metanet.js';
 
 export const SIGNIN_TAG = 'bwalletx-signin';
 export const GET_URL = 'https://bwalletx.com/get';
@@ -147,6 +159,9 @@ button[aria-busy=true]{cursor:wait}
 :host([theme=dark]) .ow,:host-context(.dark) .ow{color:#a1a1aa}
 .sw{margin:8px 0 0;width:0;min-width:100%;font-size:12px;line-height:1.4;color:#a16207;text-align:center}
 :host([theme=dark]) .sw,:host-context(.dark) .sw{color:#fcd34d}
+.mn{margin:8px 0 0;width:0;min-width:100%;font-size:12px;line-height:1.4;color:#71717a;text-align:center}
+.mn small{display:block;font-size:11px;opacity:.85}
+:host([theme=dark]) .mn,:host-context(.dark) .mn{color:#a1a1aa}
 .lnk{all:unset;cursor:pointer;color:inherit;font-weight:600;text-decoration:underline;text-underline-offset:2px}
 .lnk:focus-visible{outline:2px solid #b45309;outline-offset:2px;border-radius:2px}
 /* error: one line plus Retry */
@@ -201,8 +216,11 @@ export const PENDING_LABEL = 'Approve in bWalletX…';
 /** The pending label when the user picked a wallet other than bWalletX. */
 export const PENDING_LABEL_OTHER = 'Approve in your wallet…';
 
-/** What started a sign-in: the button ('signin'), "Other wallets" ('chooser') or "Switch" ('bwalletx', 0.6.0). */
-export type SigninMode = 'signin' | 'chooser' | 'bwalletx';
+/**
+ * What started a sign-in: the button ('signin'), "Other wallets" ('chooser'), "Switch" ('bwalletx', 0.6.0) or "Use
+ * Metanet Desktop or another BRC-100 wallet" ('metanet', 0.7.0).
+ */
+export type SigninMode = 'signin' | 'chooser' | 'bwalletx' | 'metanet';
 
 /** (0.6.0) The note shown when the remembered or connected wallet isn't bWalletX. */
 export const SWITCH_NOTE = 'Some features need bWalletX';
@@ -261,7 +279,7 @@ async function postAccess(url: string, body: unknown): Promise<unknown> {
   return res.json().catch(() => ({ error: 'bad_request', message: `HTTP ${res.status}` }));
 }
 
-const OBSERVED = ['size', 'theme', 'label', 'brand', 'subtitle', 'loading', 'disabled', 'full-width', 'aria-label', 'get-url', 'web-url', 'state', 'identity-key', 'paymail', 'handle', 'avatar-url', 'error', 'other-wallets', 'challenge-url', 'wallet-type', 'switch-note', 'remember'];
+const OBSERVED = ['size', 'theme', 'label', 'brand', 'subtitle', 'loading', 'disabled', 'full-width', 'aria-label', 'get-url', 'web-url', 'state', 'identity-key', 'paymail', 'handle', 'avatar-url', 'error', 'other-wallets', 'challenge-url', 'wallet-type', 'switch-note', 'remember', 'metanet'];
 const STATES: readonly SigninState[] = ['signed-out', 'restoring', 'pending', 'signed-in', 'error'];
 
 /** The element class. Created lazily so importing this module on a server is harmless. */
@@ -279,6 +297,10 @@ function createClass(): CustomElementConstructor {
     /** The wallet type signed in with here (0.6.0), for the Switch note. */
     #signedType: string | null = null;
     #menu: { host: HTMLElement; close: (focusChip?: boolean) => void } | null = null;
+    /** (0.7.0) A Metanet sign-in (tapped or silent) is in flight. */
+    #viaMetanet = false;
+    /** (0.7.0) Bumped by "Not you?": a Metanet sign-in started before it lands nobody. */
+    #run = 0;
 
     constructor() {
       super();
@@ -287,7 +309,7 @@ function createClass(): CustomElementConstructor {
 
     connectedCallback() {
       this.#render();
-      void this.#restore();
+      void this.#restore().then(() => this.#silentMetanet());
     }
     disconnectedCallback() { this.#menu?.close(false); this.#hideTip(); }
     attributeChangedCallback() { if (this.isConnected) this.#render(); }
@@ -385,7 +407,7 @@ function createClass(): CustomElementConstructor {
       const error = state === 'error';
       const pendingLabel = this.#controlled ? PENDING_LABEL : this.#pendingLabel;
       // 0.6.0: the tap goes to a remembered wallet that isn't bWalletX, so the button says so (and drops the "b").
-      const elsewhere = state === 'signed-out' && needsBwalletX(this.#walletType());
+      const elsewhere = state === 'signed-out' && tapGoesElsewhere(this.#walletType());
       const text = pending ? pendingLabel : error ? 'Retry' : elsewhere ? CONTINUE_OTHER_LABEL : signinText((this.#attr('label') ?? 'signin') as SigninLabel, brand);
       const subAttr = this.#attr('subtitle');
       const subDefault = brand === 'bWalletX' && (size === 'lg' || size === 'md') ? 'also works with bWallet' : null;
@@ -411,13 +433,26 @@ function createClass(): CustomElementConstructor {
         ? `<p class="sw" part="switch-note">${esc(SWITCH_NOTE)} · <button type="button" class="lnk" data-act="switch" part="switch-link">Switch</button></p>`
         : '';
       const err = error ? `<p class="err" part="error" role="alert">${esc(errText)}</p>` : '';
+      // 0.7.0: the Metanet link (its own tap only) and, when Metanet is remembered here, "Not you? Use another wallet".
+      const mnHere = this.#metanetShown(size);
+      const mnRemembered = mnHere && (pending ? this.#metanetPending() : !restoring && this.#walletType() === METANET_TYPE);
+      const notYou = `<button type="button" class="lnk" data-act="not-you" part="not-you-link">${esc(NOT_YOU_LABEL)}</button>`;
+      const mn = !mnHere
+        ? ''
+        : pending
+          ? mnRemembered ? `<p class="mn" part="metanet">${esc(METANET_REMEMBERED_NOTE)} ${notYou}</p>` : ''
+          : restoring
+            ? ''
+            : `<p class="mn" part="metanet"><button type="button" class="lnk" data-act="metanet" part="metanet-link" title="Connects to Metanet Desktop on this computer, never to a browser extension.">${esc(METANET_LABEL)}</button><small>${esc(METANET_NOTE)}</small>${mnRemembered ? `<small>${esc(METANET_REMEMBERED_NOTE)} ${notYou}</small>` : ''}</p>`;
       const compact = size === 'sm' || size === 'icon';
       const note = pending && !compact ? `<p class="note" part="note">${esc(PENDING_NOTE)}</p>` : '';
       const status = pending ? `<span class="sr" role="status">${esc(pendingLabel)}</span>` : loading ? '<span class="sr" role="status">Connecting to bWalletX…</span>' : '';
-      this.#root.innerHTML = `<style>${SIGNIN_CSS}</style>${err}<button type="button" part="button" aria-label="${esc(aria)}" title="${esc(subtitle ? `${text} (${subtitle})` : text)}"${disabled ? ' disabled' : ''}${loading ? ' aria-busy="true"' : ''}><span class="mark" part="mark">${mark}</span>${label}</button>${status}${note}${sw}${ow}${nf}`;
+      this.#root.innerHTML = `<style>${SIGNIN_CSS}</style>${err}<button type="button" part="button" aria-label="${esc(aria)}" title="${esc(subtitle ? `${text} (${subtitle})` : text)}"${disabled ? ' disabled' : ''}${loading ? ' aria-busy="true"' : ''}><span class="mark" part="mark">${mark}</span>${label}</button>${status}${note}${sw}${mn}${ow}${nf}`;
       this.button!.addEventListener('click', () => void this.#click());
       for (const l of Array.from(this.#root.querySelectorAll<HTMLElement>('[data-act=other]'))) l.addEventListener('click', () => void this.otherWallets());
       this.#root.querySelector<HTMLElement>('[data-act=switch]')?.addEventListener('click', () => void this.switchToBwalletX());
+      this.#root.querySelector<HTMLElement>('[data-act=metanet]')?.addEventListener('click', () => void this.useMetanet());
+      this.#root.querySelector<HTMLElement>('[data-act=not-you]')?.addEventListener('click', () => this.notYou());
       bindPrewarm(this.button!);
       // A nav-sized button has no room for the line: it shows in a body-level tip under the button instead, so an
       // overflow:hidden header can't clip it and the header doesn't grow.
@@ -602,6 +637,89 @@ function createClass(): CustomElementConstructor {
 
     get #remember() { return this.#attr('remember') !== 'off'; }
 
+    /**
+     * (0.7.0) "Use Metanet Desktop or another BRC-100 wallet" is offered: metanet on, or auto at lg/md when this
+     * element signs in or follows a provider. Never on a phone or inside a frame.
+     */
+    #metanetShown(size: SigninSize): boolean {
+      const a = this.#attr('metanet');
+      if (a === 'off' || !metanetOffered()) return false;
+      if (a === 'on') return true;
+      return (size === 'lg' || size === 'md') && (this.#controlled || !!this.#attr('challenge-url'));
+    }
+
+    /** A Metanet sign-in is on screen: our own, or (driven) the provider's with Metanet remembered. */
+    #metanetPending(): boolean {
+      return this.#controlled ? this.#attr('wallet-type') === METANET_TYPE : this.#viaMetanet;
+    }
+
+    /** (0.7.0) The Metanet link: connect to Metanet Desktop on localhost:3321 (after this tap, never before). */
+    useMetanet(): Promise<void> {
+      return this.#click('metanet');
+    }
+
+    /**
+     * (0.7.0) "Not you? Use another wallet": forget the remembered wallet here, and drop a Metanet sign-in in flight
+     * (if its verify already set a session, logout-url ends it). Emits bwalletx-not-you (cancelable).
+     */
+    notYou(): void {
+      if (!this.#emit('bwalletx-not-you', { element: this }, true)) return;
+      this.#run++;
+      if (this.#remember) forgetWalletChoice();
+      this.#signedType = null;
+      if (this.#viaMetanet && !this.#controlled) {
+        this.#viaMetanet = false;
+        this.#busy = false;
+        if (this.#phase === 'pending') this.#phase = 'signed-out';
+      }
+      this.#render();
+    }
+
+    /**
+     * (0.7.0) Rule 4: back with Metanet remembered and no session, ONE silent attempt per page load (2 s, a known
+     * identity key only), then the signature alone. Any stop or failure is silent: the normal button stays.
+     */
+    async #silentMetanet() {
+      if (this.#controlled || !this.#stateful || !this.#remember || this.#attr('require-token')) return;
+      // Only where the Metanet line (and so "Not you?") is on screen: not a nav-size button, not metanet="off".
+      if (!this.#metanetShown((this.#attr('size') ?? 'lg') as SigninSize)) return;
+      const challengeUrl = this.#attr('challenge-url');
+      const verifyUrl = this.#attr('verify-url');
+      if (!challengeUrl || !verifyUrl || this.#phase !== 'signed-out' || this.#busy || silentAttemptUsed()) return;
+      if (rememberedWalletChoice()?.type !== METANET_TYPE || !metanetOffered()) return;
+      const run = ++this.#run;
+      const live = () => run === this.#run;
+      const started = Date.now();
+      const r = await runSilentMetanet({
+        challengeUrl,
+        verifyUrl,
+        post: (url, body) => postJson<Record<string, unknown>>(url, body),
+        isAbandoned: () => !live(),
+        logout: async () => {
+          const out = this.#attr('logout-url');
+          if (out) await fetch(out, { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: '{}' }).catch(() => undefined);
+        },
+        onSignIn: () => {
+          if (!live() || this.#phase !== 'signed-out' || this.#busy) return;
+          this.#viaMetanet = true;
+          this.#busy = true;
+          this.#pendingLabel = PENDING_LABEL_OTHER;
+          this.#set('pending');
+        },
+        onAttempt: (a) => this.#emit('bwalletx-attempt', a),
+      });
+      if (!live()) return;
+      this.#viaMetanet = false;
+      this.#busy = false;
+      if (!r) {
+        if ((this.#phase as SigninState) === 'pending') this.#set('signed-out');
+        return;
+      }
+      this.#signedType = r.walletType;
+      this.#signedIn({ identityKey: r.identityKey!, handle: r.handle, paymail: r.paymail });
+      this.#emit('bwalletx-signed-in', { identityKey: r.identityKey, method: 'wallet', nonce: null, signature: null, response: { handle: r.handle, paymail: r.paymail }, silent: true, ms: Date.now() - started });
+    }
+
     /** The wallet type the Switch note judges: the provider's, else what signed in here, else the remembered one. */
     #walletType(): string | null {
       if (this.#controlled) return this.#attr('wallet-type');
@@ -610,14 +728,18 @@ function createClass(): CustomElementConstructor {
 
     #switchNoteShown(size: SigninSize): boolean {
       const a = this.#attr('switch-note');
-      if (a === 'off' || !needsBwalletX(this.#walletType())) return false;
+      if (a === 'off' || !tapGoesElsewhere(this.#walletType())) return false;
       return a === 'on' || size === 'lg' || size === 'md';
     }
 
-    /** Signed in: note the wallet type, and remember it for this origin when the user picked it (0.6.0). */
-    #picked(option: WalletOption, reason: ChoiceReason) {
+    /**
+     * Signed in: note the wallet type, and remember it for this origin when the user picked it (0.6.0), plus the
+     * identity key as known here (0.7.0, public keys only: Metanet's silent attempt goes on only for these).
+     */
+    #picked(option: WalletOption, reason: ChoiceReason, identityKey?: string | null) {
       this.#signedType = walletTypeOf(option);
       if (this.#remember && isExplicitPick(option, reason)) rememberWalletChoice(option);
+      if (this.#remember) rememberKnownIdentityKey(identityKey);
     }
 
     #attempt(option: WalletOption | null, outcome: AttemptOutcome, started: number) {
@@ -630,8 +752,11 @@ function createClass(): CustomElementConstructor {
      */
     async #choose(mode: SigninMode, ms: number, pairing: ReturnType<typeof pairingModal>): Promise<{ option: WalletOption; reason: ChoiceReason } | 'not-found' | null> {
       // 0.6.0: the wallet picked here before goes first when it is here (no chooser), unless this is "Switch".
+      // 0.7.0: the Metanet link goes to Metanet Desktop, and only there (pinned json-api, after this tap).
+      if (mode === 'metanet') return { option: metanetOption(), reason: 'requested' };
       const r = mode === 'signin' && this.#remember ? rememberedWalletChoice() : null;
-      if (r && !(r.type === BWALLETX_TYPE && r.substrate !== 'pairing')) {
+      // A remembered Metanet is never the button's pick (it has its own link and the silent attempt).
+      if (r && r.type !== METANET_TYPE && !(r.type === BWALLETX_TYPE && r.substrate !== 'pairing')) {
         const m = matchRemembered(await discoverWallets({ ms, pairing: () => pairing }), r);
         if (m) return { option: m, reason: 'remembered' };
       }
@@ -672,9 +797,12 @@ function createClass(): CustomElementConstructor {
       const started = Date.now();
       const pairing = pairingModal();
       let option: WalletOption | null = null;
+      const run = ++this.#run;
+      const live = () => run === this.#run;
       this.#notFound = false;
       this.#busy = true;
-      this.#pendingLabel = PENDING_LABEL;
+      this.#viaMetanet = mode === 'metanet';
+      this.#pendingLabel = mode === 'metanet' ? PENDING_LABEL_OTHER : PENDING_LABEL;
       if (own) this.#set('pending');
       else this.#render();
       try {
@@ -701,6 +829,7 @@ function createClass(): CustomElementConstructor {
         }
         // Pairing shows the QR here; "Desktop wallet" looks on localhost here (after the tap). No key asked yet.
         const cw = await option.connect({ identity: false });
+        if (!live()) return; // "Not you?" while Metanet was opening
         const wallet = cw.wallet;
         if (!wallet) throw Object.assign(new Error('This wallet cannot sign in here'), { code: 'NOT_SUPPORTED' });
         const sub = substrateOf(option);
@@ -720,7 +849,7 @@ function createClass(): CustomElementConstructor {
               challenge: (identityKey) => postJson<AccessChallengeLike>(challengeUrl, { identityKey, require: hint }),
               verify: verifyUrl ? (response) => postAccess(verifyUrl, response) : undefined,
             });
-            this.#picked(option, reason);
+            this.#picked(option, reason, a.response.identityKey);
             this.#attempt(option, 'signed-in', started);
             this.#emit('bwalletx-access-granted', { identityKey: a.response.identityKey, response: a.verified });
           } catch (e) {
@@ -735,19 +864,29 @@ function createClass(): CustomElementConstructor {
         const verifyUrl = this.#attr('verify-url');
         const { result: r, verified } = await signInAndVerify({
           wallet,
+          // Metanet hands over its key on connect (one request at a time), so its sign-in is the signature alone.
+          identityKey: cw.identityKey ?? undefined,
+          skipWaitForAuthentication: option.id === METANET_OPTION_ID, // its connect() just checked the lock
           identityKeyHint: verifyUrl ? rememberedIdentity() : undefined,
           challenge: (identityKey) => postJson<Challenge>(challengeUrl, identityKey ? { identityKey } : {}),
           verify: async (res) => (verifyUrl ? await postJson<Record<string, unknown>>(verifyUrl, { identityKey: res.identityKey, nonce: res.nonce, signature: res.signature }) : {}),
         });
+        if (!live()) {
+          // "Not you?" after the wallet signed: land nobody, and end the session the verify route may have set.
+          const out = this.#attr('logout-url');
+          if (verifyUrl && out) await fetch(out, { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: '{}' }).catch(() => undefined);
+          return;
+        }
         if (verifyUrl) rememberIdentity(r.identityKey);
         const response = verifyUrl ? (verified as { handle?: string; paymail?: string }) : null;
-        this.#picked(option, reason);
+        this.#picked(option, reason, r.identityKey);
         if (own) this.#signedIn({ identityKey: r.identityKey, handle: response?.handle ?? null, paymail: response?.paymail ?? null });
         this.#attempt(option, 'signed-in', started);
         this.#emit('bwalletx-signed-in', { identityKey: r.identityKey, method, nonce: r.nonce, signature: r.signature, response });
       } catch (error) {
         const outcome = outcomeOf(error);
         this.#attempt(option, outcome, started);
+        if (!live()) return; // dropped by "Not you?": no error to show
         // Closing the phone QR is not an error: back to where we were. Anything else shows as before.
         const closedQr = outcome === 'cancelled' && option?.kind === 'pairing';
         if (own) {
@@ -759,9 +898,12 @@ function createClass(): CustomElementConstructor {
         }
         if (!closedQr) this.#emit('bwalletx-error', { error });
       } finally {
-        this.#busy = false;
         try { pairing.close(); } catch { /* closed */ }
-        this.#render();
+        if (live()) {
+          this.#busy = false;
+          this.#viaMetanet = false;
+          this.#render();
+        }
       }
     }
   };

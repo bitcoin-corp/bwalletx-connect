@@ -10,12 +10,15 @@
  *   4. Nothing probes localhost until the user taps "Desktop wallet" (desktopOption).
  *   5. (0.6.0) A returning visitor goes straight to the wallet they explicitly picked on this origin before. Only the
  *      wallet TYPE is remembered (localStorage, so per origin), never a key. Nothing that could prompt fires on load.
+ *   6. (0.7.0) Metanet Desktop is never picked by the button's discovery, remembered or not: it is reached by its own
+ *      tap ("Use Metanet Desktop or another BRC-100 wallet") or by the one silent, known-key-only attempt (metanet.ts).
  *
  * Pure functions: the provider, runConnect and <bwalletx-signin> all decide with decideWallet().
  */
 import { RDNS_EXTENSION, RDNS_MOBILE } from './discover.js';
 import { isUserRejection } from './account.js';
 import { autoChoice, desktopOption, discoverWallets, DESKTOP_OPTION_ID, type Substrate, type WalletOption } from './wallets.js';
+import { METANET_TYPE, metanetOffered } from './metanet.js';
 
 /** The wallet type every bWalletX (extension, in-app, app frame, phone) reports. */
 export const BWALLETX_TYPE = 'bwalletx';
@@ -233,11 +236,21 @@ export function needsBwalletX(type: string | null | undefined): boolean {
 }
 
 /**
+ * (0.7.0) True when the signed-out button's tap goes to this remembered wallet instead of bWalletX ("Continue with your
+ * wallet", the Switch note). Never for Metanet: the button never picks it (it has its own link and "Not you?").
+ */
+export function tapGoesElsewhere(type: string | null | undefined): boolean {
+  return needsBwalletX(type) && type !== METANET_TYPE;
+}
+
+/**
  * The option in `list` for a remembered wallet, or null when it isn't here. bWalletX counts only by its own marker
  * (or the phone, when the phone was picked). A remembered desktop wallet gives desktopOption(): it looks on localhost
  * only when connected, i.e. after the tap.
  */
 export function matchRemembered(list: readonly WalletOption[], r: RememberedWallet): WalletOption | null {
+  // 0.7.0: the button's discovery NEVER picks Metanet (owner rule 1). Its own tap, or the silent attempt, reaches it.
+  if (r.type === METANET_TYPE) return null;
   if (r.type === BWALLETX_TYPE) {
     return (r.substrate === 'pairing' ? list.find((o) => o.kind === 'pairing') : list.find(isPresentBwalletX)) ?? null;
   }
@@ -255,9 +268,11 @@ export function matchRemembered(list: readonly WalletOption[], r: RememberedWall
  *                  discovery alone (no wallet call, so no prompt) so pay/tip work without another tap;
  *   'wait-for-tap' anything else a wallet would have to answer (a key, a signature, a localhost probe, a relay
  *                  reconnect): nothing fires; the next tap goes straight to the remembered wallet;
- *   'none'         nothing remembered, or auto-connect off.
+ *   'silent-metanet' (0.7.0) Metanet Desktop remembered, on a computer outside any frame: ONE silent attempt this page
+ *                  load (trySilentMetanet: 2 s, known identity keys only), else the normal choice;
+ *   'none'         nothing remembered, or auto-connect off (or Metanet remembered where it isn't offered).
  */
-export type AutoConnectAction = 'attach' | 'wait-for-tap' | 'none';
+export type AutoConnectAction = 'attach' | 'wait-for-tap' | 'silent-metanet' | 'none';
 
 export interface AutoConnectPlan {
   action: AutoConnectAction;
@@ -268,9 +283,18 @@ export interface AutoConnectPlan {
 
 const ATTACHABLE: readonly Substrate[] = ['extension', 'in-app', 'xdm', 'injected'];
 
-export function planAutoConnect(o: { remembered: RememberedWallet | null; signedIn: boolean; enabled?: boolean }): AutoConnectPlan {
+export function planAutoConnect(o: {
+  remembered: RememberedWallet | null;
+  signedIn: boolean;
+  enabled?: boolean;
+  /** (0.7.0) Metanet is offered here (a computer, outside any frame). Default metanetOffered(). */
+  metanetHere?: boolean;
+}): AutoConnectPlan {
   const r = o.remembered;
   if (!r || o.enabled === false) return { action: 'none', remembered: r, needsBwalletX: false };
+  if (r.type === METANET_TYPE) {
+    return { action: (o.metanetHere ?? metanetOffered()) ? 'silent-metanet' : 'none', remembered: r, needsBwalletX: false };
+  }
   const action: AutoConnectAction = o.signedIn && ATTACHABLE.includes(r.substrate) ? 'attach' : 'wait-for-tap';
   return { action, remembered: r, needsBwalletX: needsBwalletX(r.type) };
 }

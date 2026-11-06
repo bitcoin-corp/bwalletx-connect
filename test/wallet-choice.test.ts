@@ -224,7 +224,7 @@ describe('the chooser', () => {
     yours();
     const list = await discoverWallets({ ms: 20, pairing: { onLink: () => undefined, onCode: () => undefined } });
     const p = chooseWallet(list);
-    expect(rows()).toEqual(['get-bwalletx', 'bwalletx-pairing', 'io.yours', 'desktop']);
+    expect(rows()).toEqual(['get-bwalletx', 'bwalletx-pairing', 'io.yours', 'metanet']); // 0.7.0: the Metanet row replaces "Desktop wallet"
     const get = document.querySelector<HTMLAnchorElement>('[data-wallet=get-bwalletx]')!;
     expect(get.tagName).toBe('A');
     expect(get.href).toBe('https://bwalletx.com/get');
@@ -254,7 +254,7 @@ describe('no localhost probe before a tap', () => {
     const p = chooseWallet(list);
     await tick(20);
     expect(localHits()).toEqual([]);
-    document.querySelector<HTMLElement>('[data-wallet=desktop]')!.click();
+    document.querySelector<HTMLElement>('[data-wallet=metanet]')!.click(); // 0.7.0: was "Desktop wallet"
     const desktop = (await p)!;
     expect(localHits()).toEqual([]); // picking it still asks nothing: connect() looks
     await expect(desktop.connect()).rejects.toMatchObject({ code: 'NOT_FOUND' });

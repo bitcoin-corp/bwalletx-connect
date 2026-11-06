@@ -5,15 +5,30 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Wallet choice demo</title>
 <!--
-  Static demo of the wallet-choice rules (0.5.6 / 0.6.0). Build first (pnpm build), then open
-  examples/wallet-choice.html#present | #absent | #remembered | #other. Wallets are fakes that announce through
-  BRC-100 discovery exactly like bWalletX (com.bwalletx.extension) and Yours (io.yours); the sign-in routes are
-  stubbed. Nothing leaves the page.
+  Static demo of the wallet-choice rules (0.5.6 / 0.6.0 / 0.7.0). Build first (pnpm build), serve the package folder
+  over http (e.g. python3 -m http.server; the Metanet states need an http origin, not file://), then open
+  examples/wallet-choice.html#present | #absent | #remembered | #other | #metanet | #metanet-return. Wallets are fakes
+  that announce through BRC-100 discovery exactly like bWalletX (com.bwalletx.extension) and Yours (io.yours); Metanet
+  Desktop is a fake BRC-100 JSON API answering http://localhost:3321/* inside this page (the real WalletClient
+  'json-api' path runs). The sign-in routes are stubbed. Nothing leaves the page.
 -->
 <script>
   // Fake site routes: a challenge the fake wallets "sign" (they never answer, so the pending state stays on screen).
   const realFetch = window.fetch.bind(window);
+  // Fake Metanet Desktop (0.7.0): the JSON API on localhost:3321. It never answers createSignature, so the pending
+  // state stays on screen. The key is the generator point: a valid public key, nobody's wallet.
+  const DEMO_KEY = '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
+  const metanetLog = [];
+  const metanet = (call) => {
+    metanetLog.push(call);
+    const ok = (b) => new Response(JSON.stringify(b), { headers: { 'content-type': 'application/json' } });
+    if (call === 'getVersion') return ok({ version: 'metanet-demo-1.0' });
+    if (call === 'isAuthenticated') return ok({ authenticated: true });
+    if (call === 'getPublicKey') return ok({ publicKey: DEMO_KEY });
+    return new Promise(() => {});
+  };
   window.fetch = async (url, init) => {
+    if (String(url).startsWith('http://localhost:3321/')) return metanet(String(url).slice('http://localhost:3321/'.length));
     if (url === '/demo/challenge') return new Response(JSON.stringify({ nonce: 'demo', message: 'demo', keyID: 'demo' }), { headers: { 'content-type': 'application/json' } });
     if (String(url).startsWith('/demo/')) return new Response('{}', { headers: { 'content-type': 'application/json' } });
     return realFetch(url, init);
@@ -29,9 +44,14 @@
     window.addEventListener('brc100:requestWallet', () =>
       window.dispatchEvent(new CustomEvent('brc100:announceWallet', { detail: { info: { rdns, name, uuid: rdns }, wallet } })));
   };
-  try { localStorage.removeItem('bwx:wallet'); } catch {}
-  if (state === 'present' || state === 'other' || state === 'remembered') announce('com.bwalletx.extension', 'bWalletX');
-  if (state !== 'present') announce('io.yours', 'Yours Wallet');
+  try { localStorage.removeItem('bwx:wallet'); localStorage.removeItem('bwx:known-keys'); } catch {}
+  if (state === 'present' || state === 'other' || state === 'remembered' || state.startsWith('metanet')) announce('com.bwalletx.extension', 'bWalletX');
+  if (state !== 'present' && !state.startsWith('metanet')) announce('io.yours', 'Yours Wallet');
+  if (state === 'metanet-return') {
+    // Signed in with Metanet here before: the type and the (public) identity key are remembered on this origin.
+    localStorage.setItem('bwx:wallet', JSON.stringify({ type: 'metanet', substrate: 'json-api', v: 1 }));
+    localStorage.setItem('bwx:known-keys', JSON.stringify([DEMO_KEY]));
+  }
   if (state === 'remembered') localStorage.setItem('bwx:wallet', JSON.stringify({ type: 'io.yours', substrate: 'injected', v: 1 }));
 </script>
 <script src="../dist/bwalletx-connect.global.js"></script>
@@ -93,6 +113,20 @@
       rule: 'Desktop wallet looks on localhost:3321 only when tapped, so Chrome’s Local Network Access prompt follows a tap.',
       cards: [['Sign in', false]],
     },
+    metanet: {
+      pill: 'bWalletX installed · Metanet Desktop running',
+      title: 'Metanet Desktop: its own link, its own tap',
+      lede: 'bWalletX stays the gold default. “Use Metanet Desktop or another BRC-100 wallet” connects to localhost:3321, and only when tapped: nothing calls it on load.',
+      rule: 'Pinned to WalletClient(\'json-api\'), never \'auto\'. Asks for the identity key, then the sign-in signature, one at a time. Computers only, never inside a frame.',
+      cards: [['First visit', false], ['After tapping the Metanet link', 'metanet']],
+    },
+    'metanet-return': {
+      pill: 'Returning visitor · signed in with Metanet here before',
+      title: 'Back with Metanet: one silent try, known keys only',
+      lede: 'One attempt per page load, 2 s. It goes on only if Metanet returns an identity key already known on this site; otherwise the normal choice, silently.',
+      rule: 'Remembered: bwx:wallet = { "type": "metanet", "substrate": "json-api" } and bwx:known-keys (public keys). “Not you? Use another wallet” forgets it.',
+      cards: [['Returning visitor', false]],
+    },
   }[state] || {};
   document.getElementById('pill').textContent = S.pill;
   document.getElementById('title').textContent = S.title;
@@ -114,9 +148,17 @@
     return { el, tap };
   });
   setTimeout(() => {
-    for (const { el, tap } of els) if (tap) el.button.click();
+    for (const { el, tap } of els) if (tap === 'metanet') el.useMetanet(); else if (tap) el.button.click();
     if (state === 'other') els[0].el.otherWallets();
   }, 50);
+  if (state.startsWith('metanet')) {
+    const log = document.createElement('p');
+    log.className = 'rule';
+    const show = () => { log.textContent = `Calls to Metanet Desktop (localhost:3321) so far: ${metanetLog.length ? metanetLog.join(' → ') : 'none'}`; };
+    show();
+    setInterval(show, 250);
+    document.querySelector('main').append(log);
+  }
 </script>
 </body>
 </html>

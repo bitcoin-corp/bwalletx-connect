@@ -12,7 +12,7 @@ export type { SigninSize, SigninTheme, SigninLabel, SigninBrand, SigninState, Si
 export { accountLabel, avatarUrlFor, lookupPaymail, shortKey, isUserRejection, signInErrorText, rememberedIdentity, rememberIdentity, IDENTITY_HINT_KEY, PAYMAIL_LOOKUP_URL, BAVATAR_URL } from './account.js';
 export { defineBwalletxButton, getUrlFor, stateFor, handleLabel, dropLegacyConnectedKey, migrateConnectedKey, BUTTON_TAG, CONNECTED_KEY } from './wallet-button.js';
 export type { ButtonState } from './wallet-button.js';
-export { pay, tip, buyToken, amountInSats, resolvePaymailP2P, PaymentError, BRC29_PROTOCOL, isPaymail, isIdentityKeyHex } from './pay.js';
+export { pay, tip, buyToken, amountInSats, resolvePaymailP2P, PaymentError, BRC29_PROTOCOL, isPaymail, isIdentityKeyHex, isInsufficientFunds, NO_COINS_TEXT } from './pay.js';
 export type { PayRequest, PayResult, PayOptions, PayOutput, PaySource, LegacyPayer, Brc29Remittance, BuyTokenRequest, TokenQuote, PaymentErrorCode } from './pay.js';
 export { discoverWallets, brc100Option, pairingOption, desktopOption, handcashAdapter, autoChoice, cwiIsAnnounced, DESKTOP_OPTION_ID } from './wallets.js';
 export type { WalletOption, ConnectedWallet, WalletKind, Substrate, DiscoverWalletsOptions, HandCashAdapterOptions, ConnectOptions } from './wallets.js';
@@ -22,7 +22,7 @@ export {
   BWALLETX_TYPE, decideWallet, hasBwalletX, isPresentBwalletX, otherDetected, chooserOrder, walletTypeOf, substrateOf,
   attemptFor, outcomeOf, reportAttempt,
   WALLET_CHOICE_KEY, rememberWalletChoice, rememberedWalletChoice, forgetWalletChoice, isRememberable, isExplicitPick,
-  matchRemembered, needsBwalletX, planAutoConnect, attachRemembered,
+  matchRemembered, needsBwalletX, tapGoesElsewhere, planAutoConnect, attachRemembered,
 } from './choice.js';
 export type {
   WalletChoice, ChoiceReason, DecideWalletOptions, ConnectAttempt, AttemptOutcome, AttemptHook, RememberedWallet, AutoConnectAction, AutoConnectPlan,
@@ -32,5 +32,11 @@ export type { RequestAccessOptions, RequestAccessResult, AccessChallengeLike } f
 export { ACCESS_PROTOCOL, ACCESS_VERSION, AccessError, PROTOCOL_MEDIA, protocolMediaUrl, accessErrorMessage, canonicalJson, ACCESS_ERROR_STATUS } from './access.js';
 export type { AccessKind, AccessRequirement, TokenRequirement, AccessChallenge, AccessResponse, HoldingProof, AccessErrorCode, AccessErrorBody } from './access.js';
 export { declareWalletTheme, WALLET_THEME_META } from './theme.js';
-export { runConnect } from './connect-flow.js';
-export type { ConnectFlowOptions, ConnectFlowResult } from './connect-flow.js';
+export { runConnect, runSilentMetanet } from './connect-flow.js';
+export type { ConnectFlowOptions, ConnectFlowResult, SilentMetanetOptions } from './connect-flow.js';
+export {
+  METANET_TYPE, METANET_OPTION_ID, METANET_JSON_API, METANET_LABEL, METANET_NOTE, METANET_REMEMBERED_NOTE, NOT_YOU_LABEL, METANET_UNREACHABLE,
+  METANET_ANSWER_MS, METANET_SILENT_MS, KNOWN_KEYS_KEY, MetanetUnreachableError, metanetOption, connectMetanetDesktop, metanetOffered, inAnyFrame,
+  knownIdentityKeys, isKnownIdentityKey, rememberKnownIdentityKey, trySilentMetanet, silentAttemptUsed, claimSilentAttempt, resetSilentAttempt,
+} from './metanet.js';
+export type { MetanetOptions, SilentMetanetResult, SilentStop, FrameWindow } from './metanet.js';
