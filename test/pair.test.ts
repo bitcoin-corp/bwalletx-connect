@@ -1,7 +1,7 @@
 import { PrivateKey } from '@bsv/sdk';
 import { describe, expect, it } from 'vitest';
 import { pairBwalletX, restorePairing, type PairStorage } from '../src/pair';
-import { DEFAULT_RELAY, QR_LIFETIME_S, Sealer, claimDigest, deriveSession, isSealed, newChannel, pairUrl, parsePairUrl, relaySocketUrl, walletClaimFor, type HelloFrame } from '../src/protocol';
+import { DEFAULT_RELAY, QR_LIFETIME_S, Sealer, claimDigest, deriveSession, isSealed, newChannel, pairUrl, parsePairUrl, relaySocketUrl, sessionWalletClaim, walletClaimFor, type HelloFrame } from '../src/protocol';
 import { FakeRelay } from './fake-relay';
 import { fakePhone } from './phone';
 
@@ -140,5 +140,67 @@ describe('relay role claims (b-Aware 26 Oct 2026, N3-1/N3-2)', () => {
     const sc = JSON.parse(storage.m.get('bwalletx.connect.pairing.v1')!).sc;
     expect(sc).toMatch(/^[A-Za-z0-9_-]{22,64}$/);
     expect(new URL(relay.urls.at(-1)!).searchParams.get('claim')).toBe(sc);
+  });
+});
+
+describe('wallet claim v2 (session-bound wallet claim)', () => {
+  const P = PrivateKey.fromHex('11'.repeat(32));
+  const S = PrivateKey.fromHex('22'.repeat(32));
+  const C = 'AAAAAAAAAAAAAAAAAAAAAA';
+  // Shared with bWalletX (src/pair/relayClaims.test.ts) and the bwalletx CLI: keep them in step.
+  const VECTOR = 'rTgy5TUbOz2xUwLyqYebrIyLaQifFhULNSSHHklw0gQ';
+
+  it('both ends compute the same claim, it matches the shared vector, and the QR alone does not give it', async () => {
+    expect(sessionWalletClaim(P, S.toPublicKey().toString(), C)).toBe(VECTOR);
+    expect(sessionWalletClaim(S, P.toPublicKey().toString(), C)).toBe(VECTOR);
+    expect(sessionWalletClaim(PrivateKey.fromRandom(), S.toPublicKey().toString(), C)).not.toBe(VECTOR);
+    expect(await walletClaimFor(C, S.toPublicKey().toString())).not.toBe(VECTOR);
+    expect(await claimDigest(VECTOR)).toBe('70d13b85c6bf389eafdc3d9b1c155826fda8517003bf2f4a8600b4dc0d06e759');
+  });
+
+  it('a wallet socket carries the digest as nc, a site socket as wc', () => {
+    const d = 'f'.repeat(64);
+    expect(new URL(relaySocketUrl(DEFAULT_RELAY, C, 'wallet', undefined, 'x'.repeat(22), d)).searchParams.get('nc')).toBe(d);
+    expect(new URL(relaySocketUrl(DEFAULT_RELAY, C, 'wallet', undefined, 'x'.repeat(22), d)).searchParams.get('wc')).toBeNull();
+    expect(new URL(relaySocketUrl(DEFAULT_RELAY, C, 'site', 1, 'x'.repeat(22), d)).searchParams.get('nc')).toBeNull();
+  });
+
+  it('with a v2 wallet the site stores wv and re-binds the session claim on every reconnect', async () => {
+    const relay = new FakeRelay(ORIGIN, true);
+    const storage = mapStorage();
+    let phone: ReturnType<typeof fakePhone> | null = null;
+    const first = await pairBwalletX({
+      origin: ORIGIN,
+      storage,
+      socket: relay.socket,
+      onCode: () => {},
+      onLink: (link) => setTimeout(() => (phone = fakePhone(link, relay.socket, PrivateKey.fromRandom(), { v2: true })), 0),
+    });
+    const stored = JSON.parse(storage.m.get('bwalletx.connect.pairing.v1')!);
+    expect(stored.wv).toBe(2);
+    first.close();
+    const again = await restorePairing({ storage, socket: relay.socket });
+    await again!.getPublicKey({ identityKey: true });
+    const reopened = new URL(relay.urls.filter((u) => u.includes('role=site')).pop()!);
+    // The digest of the claim the phone holds: computed here only from our key and the phone's hello.
+    expect(reopened.searchParams.get('wc')).toBe(await claimDigest(phone!.sessionClaim!));
+    expect(reopened.searchParams.get('claim')).toBe(stored.sc);
+  });
+
+  it('with an older wallet or relay (no wcv) nothing changes: no wv, no wc on reconnect', async () => {
+    const relay = new FakeRelay(ORIGIN, false);
+    const storage = mapStorage();
+    const first = await pairBwalletX({
+      origin: ORIGIN,
+      storage,
+      socket: relay.socket,
+      onCode: () => {},
+      onLink: (link) => setTimeout(() => fakePhone(link, relay.socket, PrivateKey.fromRandom(), { v2: true }), 0),
+    });
+    expect(JSON.parse(storage.m.get('bwalletx.connect.pairing.v1')!).wv).toBeUndefined();
+    first.close();
+    const again = await restorePairing({ storage, socket: relay.socket });
+    await again!.getPublicKey({ identityKey: true });
+    expect(new URL(relay.urls.filter((u) => u.includes('role=site')).pop()!).searchParams.get('wc')).toBeNull();
   });
 });

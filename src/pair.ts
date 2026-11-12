@@ -12,6 +12,7 @@ import {
   newClaim,
   pairUrl,
   relaySocketUrl,
+  sessionWalletClaim,
   walletClaimFor,
   type HelloFrame,
   type PairMessage,
@@ -77,6 +78,7 @@ interface StoredPairing {
   lastSeen: number;
   pairedAt: number;
   sc?: string; // our relay site claim, sent on every connect. Pairings stored before 0.5.4 get one on reconnect.
+  wv?: 2; // wallet claim v2: the relay binds the wallet role to the session claim; we re-bind it on every connect.
 }
 
 const DEFAULT_KEY = 'bwalletx.connect.pairing.v1';
@@ -115,6 +117,7 @@ function parseStored(raw: string | null): StoredPairing | null {
     if (typeof p.k !== 'string' || !/^0[23][0-9a-f]{64}$/i.test(p.k)) return null;
     if (!n(p.sent) || !n(p.lastSeen) || !n(p.pairedAt)) return null;
     if (p.sc !== undefined && (typeof p.sc !== 'string' || !/^[A-Za-z0-9_-]{22,64}$/.test(p.sc))) return null;
+    if (p.wv !== undefined && p.wv !== 2) return null;
     return p as StoredPairing;
   } catch {
     return null;
@@ -172,7 +175,7 @@ class Link {
     await this.opening;
   }
 
-  private reopen() {
+  private async reopen() {
     // Pairings stored before site claims get one now; the relay binds it on this connect.
     if (!this.p.sc) {
       this.p = { ...this.p, sc: newClaim() };
@@ -180,7 +183,11 @@ class Link {
     }
     // A fresh expiry lets the relay recreate the channel if it was dropped; the wallet rejoins on its own.
     const e = Math.floor(Date.now() / 1000) + QR_LIFETIME_S - 10;
-    const ws = this.socket(relaySocketUrl(this.p.r, this.p.c, 'site', e, this.p.sc));
+    // Wallet claim v2: (re-)bind the wallet role to the session claim, so a re-created channel admits only that phone.
+    // Older wallets keep the claim they have, so nothing is sent for them (the relay keeps what it bound).
+    const wc =
+      this.p.wv === 2 ? await claimDigest(sessionWalletClaim(PrivateKey.fromHex(this.p.s), this.p.k, this.p.c)) : undefined;
+    const ws = this.socket(relaySocketUrl(this.p.r, this.p.c, 'site', e, this.p.sc, wc));
     return new Promise<void>((resolve, reject) => {
       ws.onopen = () => {
         this.ws = ws;
@@ -301,6 +308,7 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
     }
     let sealer: Sealer | null = null;
     let walletKey = '';
+    let v2 = false;
     let settled = false;
     const fail = (e: Error) => {
       if (settled) return;
@@ -323,6 +331,7 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
       }
       if ((f as HelloFrame).t === 'hello' && !sealer) {
         walletKey = (f as HelloFrame).k;
+        v2 = (f as HelloFrame).wcv === 2;
         const s = await deriveSession(siteKey, walletKey, channel);
         sealer = new Sealer(s.key, 'site');
         opts.onCode(s.code);
@@ -334,7 +343,7 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
       if (msg.t === 'ready') {
         settled = true;
         clearTimeout(timer);
-        const p: StoredPairing = { v: 1, c: channel, r: relay, s: siteKey.toHex(), k: walletKey, ...sealer.counters, pairedAt: Date.now(), sc: siteClaim };
+        const p: StoredPairing = { v: 1, c: channel, r: relay, s: siteKey.toHex(), k: walletKey, ...sealer.counters, pairedAt: Date.now(), sc: siteClaim, ...(v2 && { wv: 2 as const }) };
         await Promise.resolve(storage.setItem(key, JSON.stringify(p))).catch(() => {});
         const link = new Link(p, sealer, storage, key, socket, opts.callTimeoutMs ?? 120_000);
         link.adopt(ws);
