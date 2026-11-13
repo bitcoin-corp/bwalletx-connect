@@ -315,7 +315,9 @@ renderButton('#bwx-button', {
           onLink: async (link) => {
             panel.innerHTML = `<img src="${await QRCode.toDataURL(link)}" alt="Scan with bWalletX">`;
           },
-          onCode: (code) => panel.append(`Check bWalletX shows ${code}, then tap Connect.`),
+          onCode: (code) => panel.append(code),
+          // Ask, don't just show: pairing finishes only after a yes here and Connect in bWalletX.
+          confirmCode: (code) => confirm(`Does bWalletX show ${code}?`),
         },
       });
       await post('/auth/bwalletx/verify', { identityKey: r.identityKey, nonce: r.nonce, signature: r.signature });
@@ -350,7 +352,7 @@ It returns `{ identityKey, signature, nonce, method, wallet }`. Post the first t
 |---|---|
 | `findBwalletX(ms?)` | The extension or in-app wallet, or `null`. |
 | `discoverBwalletX(ms?)` | The same, plus `method` and `rdns`. |
-| `pairBwalletX({ onLink, onCode, storage?, signal?, socket?, origin?, relay? })` | Pair over the relay. Resolves with a wallet when the user taps Connect. |
+| `pairBwalletX({ onLink, onCode, confirmCode, storage?, signal?, socket?, origin?, relay? })` | Pair over the relay. Resolves with a wallet once the user taps Connect in bWalletX **and** `confirmCode` says the codes match (a no unpairs and rejects). `confirmCode` is required: without it pairing refuses. `pairingModal()` always asks. |
 | `restorePairing({ storage? })` | The wallet from a stored pairing, or `null`. It connects on the first call. |
 | `clearPairing()` | Delete the stored pairing without telling the wallet. |
 | `wallet.close()` / `wallet.forget()` | On a paired wallet: close the socket, or unpair and delete it. |
@@ -369,6 +371,8 @@ The phone sends a plain `hello` and then, as soon as the user taps Connect, an e
 ### Relay claims
 
 Since 0.5.4 the site side sends a role claim to the relay on every connect, and a digest of the QR-bound wallet claim when it opens a channel. Only the socket with your claim can take the site role, and only a phone that scanned your QR can take the wallet role. The relay (relay.bwallet.space) keeps a compatibility window for older sites and wallets until **30 Nov 2026**: until then a site without a claim can still open a channel and an older wallet can still join one. After that date the relay refuses both, so update `@bwalletx/connect` (or a copied `protocol.ts` + pairing code) before then. Sites that copied the pairing code must send `claim` on every site socket (keep it with the pairing) and `wc = claimDigest(await walletClaimFor(channel, sitePub))` when opening a new channel.
+
+Since 0.5.5 (wallet claim v2) a wallet that joins with the QR-bound claim also sends `nc`, the digest of `sessionWalletClaim(itsPairingKey, sitePub, channel)`, and the relay binds the wallet role to that from then on, so the QR claim stops admitting anyone. When the hello says `wcv: 2`, keep that with the pairing and send `wc = claimDigest(sessionWalletClaim(sitePairingKey, walletPub, channel))` on every reconnect.
 
 ## One script tag
 

@@ -205,7 +205,7 @@ describe('picker: dedupe and auto-pick', () => {
 
   it('one wallet in this browser → no picker, even with phone pairing offered', () => {
     const ext = brc100Option(trackedWallet().wallet, { id: 'com.bwalletx.extension', name: 'bWalletX', isBwalletX: true });
-    const phone = pairingOption({ onLink: () => undefined, onCode: () => undefined });
+    const phone = pairingOption({ onLink: () => undefined, onCode: () => undefined, confirmCode: () => true });
     expect(autoChoice([ext, phone])).toBe(ext);
     expect(autoChoice([ext])).toBe(ext);
     expect(autoChoice([phone])).toBe(phone);
@@ -248,7 +248,7 @@ describe('connect() (BwalletXProvider) signs in with one sheet', () => {
 
   it('extension + phone pairing: no picker, no getPublicKey before the batch, signed in', async () => {
     const t = trackedWallet();
-    const list: WalletOption[] = [brc100Option(t.wallet, { id: 'com.bwalletx.extension', name: 'bWalletX', isBwalletX: true }), pairingOption({ onLink: () => undefined, onCode: () => undefined })];
+    const list: WalletOption[] = [brc100Option(t.wallet, { id: 'com.bwalletx.extension', name: 'bWalletX', isBwalletX: true }), pairingOption({ onLink: () => undefined, onCode: () => undefined, confirmCode: () => true })];
     const s = site();
     const r = await runConnect({ list, pick: noPicker, challengeUrl: '/c', verifyUrl: '/v', post: s.post });
     expect(r?.signedIn).toBe(true);

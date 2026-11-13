@@ -62,6 +62,7 @@ describe('signInWithBwalletX', () => {
         storage: null,
         socket: relay.socket,
         onCode: () => {},
+        confirmCode: () => true,
         onLink: (link) => setTimeout(() => fakePhone(link, relay.socket, root), 0),
       },
     });

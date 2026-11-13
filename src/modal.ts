@@ -96,7 +96,9 @@ export function pairingModal(o: PairingModalOptions = {}): PairingOptions & { cl
   const ac = new AbortController();
   let ui: ReturnType<typeof mount> | null = null;
   let codeEl: HTMLDivElement | null = null;
+  let answer: ((ok: boolean) => void) | null = null;
   const close = () => {
+    answer?.(false);
     ui?.close();
     ui = null;
   };
@@ -145,11 +147,36 @@ export function pairingModal(o: PairingModalOptions = {}): PairingOptions & { cl
       ui.box.append(h, p, qr, codeEl, row);
     },
     onCode(code) {
-      if (codeEl) {
-        codeEl.textContent = code;
-        const p = ui?.box.querySelector('p');
-        if (p) p.textContent = 'Check bWalletX shows the same code, then tap Connect.';
-      }
+      if (codeEl) codeEl.textContent = code;
+    },
+    // Asked as a question with two buttons, not a line of text: a code nobody has to answer is a code nobody checks.
+    confirmCode(code) {
+      const box = ui?.box;
+      if (!box || !codeEl) return false;
+      const p = box.querySelector('p');
+      if (p) p.textContent = 'Does bWalletX show this code?';
+      codeEl.textContent = code;
+      return new Promise<boolean>((resolve) => {
+        const row = el('div', 'bwx-row bwx-confirm');
+        const no = el('button', 'bwx-btn', 'No');
+        const yes = el('button', 'bwx-btn bwx-primary', 'Yes, it matches');
+        answer = (ok) => {
+          answer = null;
+          resolve(ok);
+        };
+        no.onclick = () => {
+          if (p) p.textContent = "The codes didn't match, so nothing was connected.";
+          row.remove();
+          answer?.(false);
+        };
+        yes.onclick = () => {
+          if (p) p.textContent = 'Now tap Connect in bWalletX, if you haven’t yet.';
+          row.remove();
+          answer?.(true);
+        };
+        row.append(no, yes);
+        codeEl!.after(row);
+      });
     },
   };
 }
