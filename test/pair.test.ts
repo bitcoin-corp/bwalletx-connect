@@ -109,6 +109,23 @@ describe('the site asks the user to confirm the code', () => {
     expect(phone().closes).toEqual(['codes did not match']);
   });
 
+  it('an onCode that throws still leaves the question to answer', async () => {
+    const relay = new FakeRelay(ORIGIN);
+    let asked = false;
+    const p = pairBwalletX({
+      origin: ORIGIN,
+      storage: null,
+      socket: relay.socket,
+      onCode: () => {
+        throw new Error('ui bug');
+      },
+      confirmCode: async () => ((asked = true), false),
+      onLink: (link) => setTimeout(() => fakePhone(link, relay.socket, PrivateKey.fromRandom()), 0),
+    });
+    await expect(p).rejects.toThrow();
+    expect(asked).toBe(true);
+  });
+
   it('a confirmCode that throws counts as a no', async () => {
     const { p } = pair(new FakeRelay(ORIGIN), () => {
       throw new Error('ui gone');

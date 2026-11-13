@@ -342,7 +342,7 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
         v2 = (f as HelloFrame).wcv === 2;
         const s = await deriveSession(siteKey, walletKey, channel);
         sealer = new Sealer(s.key, 'site');
-        opts.onCode(s.code);
+        // Ask before showing: a throwing onCode must not let ready finish without the question.
         if (opts.confirmCode) {
           const ask = opts.confirmCode;
           answer = new Promise<boolean>((r) => r(ask(s.code))).catch(() => false);
@@ -355,6 +355,7 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
             fail(new Error("The codes didn't match, so nothing was connected. Show a new code and try again."));
           });
         }
+        opts.onCode(s.code);
         return;
       }
       if (!sealer || !isSealed(f)) return;
