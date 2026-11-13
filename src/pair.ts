@@ -54,12 +54,12 @@ export interface PairingOptions extends PairConnectionOptions {
   /** Show this 4-digit code. The wallet shows the same one; the user checks they match. */
   onCode: (code: string) => void;
   /**
-   * Ask the user whether the wallet shows the same code, and resolve true only if they say it does. When set, pairing
+   * Required. Ask the user whether the wallet shows the same code, and resolve true only if they say it does. Pairing
    * finishes only after both the wallet's Connect and a yes here; a no tells the wallet to unpair and rejects. Whoever
    * joins the QR's channel first gets it, so someone who saw the QR before the user's phone scanned it would show a
    * different code (and the user's phone would say the code was already used). pairingModal() always asks.
    */
-  confirmCode?: (code: string) => boolean | Promise<boolean>;
+  confirmCode: (code: string) => boolean | Promise<boolean>;
   signal?: AbortSignal;
   /** Relay host. Default relay.bwallet.space. */
   relay?: string;
@@ -129,6 +129,15 @@ function parseStored(raw: string | null): StoredPairing | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * A wallet `ready` with `wcv: 2` names its session claim's digest (`nc`). True only when that matches the claim we
+ * derive ourselves from our pairing key and the wallet's, so both ends re-bind the same claim.
+ */
+async function readySaysV2(msg: PairMessage, mine: PrivateKey, walletKey: string, channel: string): Promise<boolean> {
+  if (msg.t !== 'ready' || msg.wcv !== 2 || typeof msg.nc !== 'string') return false;
+  return msg.nc === (await claimDigest(sessionWalletClaim(mine, walletKey, channel)));
 }
 
 class Link {
@@ -228,8 +237,13 @@ class Link {
       this.waiting.delete(msg.id);
       if (msg.error) w.reject(Object.assign(new Error(msg.error.message), { code: msg.error.code }));
       else w.resolve(msg.result);
-    } else if (msg.t === 'ready' && msg.wcv === 2 && this.p.wv !== 2) {
-      // A pairing that started as v1: the phone's relay now holds its session claim, so re-bind it from now on.
+    } else if (
+      msg.t === 'ready' &&
+      this.p.wv !== 2 &&
+      (await readySaysV2(msg, PrivateKey.fromHex(this.p.s), this.p.k, this.p.c))
+    ) {
+      // A pairing that started as v1: re-bind the wallet role to the phone's session claim on our next connect (the
+      // relay accepts that from the site claim we opened the channel with). That is how a v1 pairing upgrades.
       this.p = { ...this.p, wv: 2 };
       this.persist();
     } else if (msg.t === 'close') {
@@ -301,6 +315,11 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
   const relay = opts.relay ?? DEFAULT_RELAY;
   const origin = opts.origin ?? (typeof location !== 'undefined' ? location.origin : '');
   if (!origin) return Promise.reject(new Error('pairBwalletX needs options.origin outside a browser'));
+  // The code check is what stops someone who saw the QR first, so pairing never finishes on the wallet's Connect alone.
+  if (typeof opts.confirmCode !== 'function')
+    return Promise.reject(
+      new Error('pairBwalletX needs options.confirmCode: ask the user whether bWalletX shows the same code'),
+    );
 
   const siteKey = PrivateKey.fromRandom(); // a throwaway pairing key, not a wallet key
   const channel = newChannel();
@@ -321,7 +340,7 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
     let walletKey = '';
     let v2 = false;
     let settled = false;
-    let answer: Promise<boolean> | null = null; // the user's reply to confirmCode, when the site asks
+    let answer: Promise<boolean> | null = null; // the user's reply to confirmCode
     const fail = (e: Error) => {
       if (settled) return;
       settled = true;
@@ -347,7 +366,7 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
         const s = await deriveSession(siteKey, walletKey, channel);
         sealer = new Sealer(s.key, 'site');
         // Ask before showing: a throwing onCode must not let ready finish without the question.
-        if (opts.confirmCode) {
+        {
           const ask = opts.confirmCode;
           answer = new Promise<boolean>((r) => r(ask(s.code))).catch(() => false);
           void answer.then(async (ok) => {
@@ -367,6 +386,8 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
       if (!msg) return;
       if (msg.t === 'ready') {
         if (answer && !(await answer)) return; // a no unpairs the wallet and rejects (above)
+        // The wallet's ready names its session claim (wallet claim v2) even when the relay didn't bind it yet.
+        if (!v2 && (await readySaysV2(msg, siteKey, walletKey, channel))) v2 = true;
         if (settled) return;
         settled = true;
         clearTimeout(timer);

@@ -48,6 +48,7 @@ describe('frame ordering', () => {
       storage: null,
       socket: relay.socket,
       onCode: (c) => (code = c),
+      confirmCode: () => true,
       onLink: (link) => setTimeout(() => (phone = fakePhone(link, relay.socket, root, { burst: true })), 0),
     });
     expect(code).toMatch(/^\d{4}$/);
@@ -134,6 +135,16 @@ describe('the site asks the user to confirm the code', () => {
   });
 });
 
+describe('confirmCode is required', () => {
+  it('without it pairing refuses at once, before opening a socket', async () => {
+    const relay = new FakeRelay(ORIGIN);
+    await expect(
+      pairBwalletX({ origin: ORIGIN, storage: null, socket: relay.socket, onCode: () => {}, onLink: () => {} } as never),
+    ).rejects.toThrow(/confirmCode/);
+    expect(relay.urls).toHaveLength(0);
+  });
+});
+
 describe('pairing survives a reload', () => {
   it('restorePairing reconnects with the stored key and counters', async () => {
     const relay = new FakeRelay(ORIGIN);
@@ -145,6 +156,7 @@ describe('pairing survives a reload', () => {
       storage,
       socket: relay.socket,
       onCode: () => {},
+      confirmCode: () => true,
       onLink: (link) => setTimeout(() => (phone = fakePhone(link, relay.socket, root)), 0),
     });
     await first.getPublicKey({ identityKey: true });
@@ -178,6 +190,7 @@ describe('relay role claims (b-Aware 26 Oct 2026, N3-1/N3-2)', () => {
       storage,
       socket: relay.socket,
       onCode: () => {},
+      confirmCode: () => true,
       onLink: (link) => {
         qr = link;
         setTimeout(() => fakePhone(link, relay.socket, root), 0);
@@ -207,6 +220,7 @@ describe('relay role claims (b-Aware 26 Oct 2026, N3-1/N3-2)', () => {
       storage,
       socket: relay.socket,
       onCode: () => {},
+      confirmCode: () => true,
       onLink: (link) => setTimeout(() => fakePhone(link, relay.socket, PrivateKey.fromRandom()), 0),
     }).then((w) => w.close());
     const old = JSON.parse(storage.m.get('bwalletx.connect.pairing.v1')!);
@@ -251,6 +265,7 @@ describe('wallet claim v2 (session-bound wallet claim)', () => {
       storage,
       socket: relay.socket,
       onCode: () => {},
+      confirmCode: () => true,
       onLink: (link) => setTimeout(() => (phone = fakePhone(link, relay.socket, PrivateKey.fromRandom(), { v2: true })), 0),
     });
     const stored = JSON.parse(storage.m.get('bwalletx.connect.pairing.v1')!);
@@ -272,6 +287,7 @@ describe('wallet claim v2 (session-bound wallet claim)', () => {
       storage,
       socket: relay.socket,
       onCode: () => {},
+      confirmCode: () => true,
       onLink: (link) => setTimeout(() => fakePhone(link, relay.socket, PrivateKey.fromRandom(), { v2: true }), 0),
     });
     expect(JSON.parse(storage.m.get('bwalletx.connect.pairing.v1')!).wv).toBeUndefined();
@@ -281,7 +297,7 @@ describe('wallet claim v2 (session-bound wallet claim)', () => {
     expect(new URL(relay.urls.filter((u) => u.includes('role=site')).pop()!).searchParams.get('wc')).toBeNull();
   });
 
-  it('a v1 pairing learns wv from a sealed ready with wcv 2 (the phone upgraded on resume) and re-binds from then on', async () => {
+  it('a v1 pairing learns wv from a sealed ready naming the session claim, and re-binds it from then on', async () => {
     const relay = new FakeRelay(ORIGIN, false);
     const storage = mapStorage();
     let phone: ReturnType<typeof fakePhone> | null = null;
@@ -290,13 +306,19 @@ describe('wallet claim v2 (session-bound wallet claim)', () => {
       storage,
       socket: relay.socket,
       onCode: () => {},
+      confirmCode: () => true,
       onLink: (link) => setTimeout(() => (phone = fakePhone(link, relay.socket, PrivateKey.fromRandom(), { v2: true })), 0),
     });
     expect(JSON.parse(storage.m.get('bwalletx.connect.pairing.v1')!).wv).toBeUndefined();
     await first.getPublicKey({ identityKey: true });
-    // The phone resumed, its relay bound the session claim, and it says so in a sealed ready.
-    phone!.ws!.send(JSON.stringify(await phone!.sealer!.seal({ t: 'ready', wcv: 2 })));
-    await new Promise((r) => setTimeout(r, 0));
+    // A ready naming a claim we don't derive changes nothing.
+    phone!.ws!.send(JSON.stringify(await phone!.sealer!.seal({ t: 'ready', wcv: 2, nc: 'f'.repeat(64) })));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(JSON.parse(storage.m.get('bwalletx.connect.pairing.v1')!).wv).toBeUndefined();
+    // The phone names its session claim in a sealed ready (it does on every resume): re-bind it from now on.
+    const nc = await claimDigest(phone!.sessionClaim!);
+    phone!.ws!.send(JSON.stringify(await phone!.sealer!.seal({ t: 'ready', wcv: 2, nc })));
+    await new Promise((r) => setTimeout(r, 30));
     expect(JSON.parse(storage.m.get('bwalletx.connect.pairing.v1')!).wv).toBe(2);
     first.close();
     const again = await restorePairing({ storage, socket: relay.socket });

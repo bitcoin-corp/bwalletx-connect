@@ -27,8 +27,11 @@ export type PairLink = { v: string; r: string; c: string; k: string; o: string; 
 export type PairMessage =
   | { t: 'req'; id: string; action: string; params: unknown }
   | { t: 'res'; id: string; result?: unknown; error?: { code: string; message: string } }
-  /** `wcv: 2`: as on the hello; also sent on a resume, so a pairing that started as v1 learns the phone upgraded. */
-  | { t: 'ready'; wcv?: 2 }
+  /**
+   * `wcv: 2` + `nc`: the wallet's session claim digest. The site checks it against its own derivation, stores `wv: 2`
+   * and sends it as `wc` on its next connects (that is also how a pairing that started as v1 upgrades).
+   */
+  | { t: 'ready'; wcv?: 2; nc?: string }
   | { t: 'ping' }
   | { t: 'close'; reason: string };
 

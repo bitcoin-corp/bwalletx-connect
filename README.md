@@ -352,7 +352,7 @@ It returns `{ identityKey, signature, nonce, method, wallet }`. Post the first t
 |---|---|
 | `findBwalletX(ms?)` | The extension or in-app wallet, or `null`. |
 | `discoverBwalletX(ms?)` | The same, plus `method` and `rdns`. |
-| `pairBwalletX({ onLink, onCode, confirmCode?, storage?, signal?, socket?, origin?, relay? })` | Pair over the relay. Resolves with a wallet when the user taps Connect, and, with `confirmCode`, says the codes match (a no unpairs and rejects). `pairingModal()` always asks. |
+| `pairBwalletX({ onLink, onCode, confirmCode, storage?, signal?, socket?, origin?, relay? })` | Pair over the relay. Resolves with a wallet once the user taps Connect in bWalletX **and** `confirmCode` says the codes match (a no unpairs and rejects). `confirmCode` is required: without it pairing refuses. `pairingModal()` always asks. |
 | `restorePairing({ storage? })` | The wallet from a stored pairing, or `null`. It connects on the first call. |
 | `clearPairing()` | Delete the stored pairing without telling the wallet. |
 | `wallet.close()` / `wallet.forget()` | On a paired wallet: close the socket, or unpair and delete it. |
