@@ -200,9 +200,14 @@ class Link {
     // A fresh expiry lets the relay recreate the channel if it was dropped; the wallet rejoins on its own.
     const e = Math.floor(Date.now() / 1000) + QR_LIFETIME_S - 10;
     // Wallet claim v2: (re-)bind the wallet role to the session claim, so a re-created channel admits only that phone.
-    // Older wallets keep the claim they have, so nothing is sent for them (the relay keeps what it bound).
+    // A v1 pairing sends the QR-bound claim's digest instead (review 13 Nov 2026): a channel the relay re-creates
+    // (deploy, lost state, idle sweep) is then bound to it, so someone who knows only the channel ID can't take the
+    // wallet role or bind their own claim; the phone rejoins with that claim and upgrades itself.
+    const key = PrivateKey.fromHex(this.p.s);
     const wc =
-      this.p.wv === 2 ? await claimDigest(sessionWalletClaim(PrivateKey.fromHex(this.p.s), this.p.k, this.p.c)) : undefined;
+      this.p.wv === 2
+        ? await claimDigest(sessionWalletClaim(key, this.p.k, this.p.c))
+        : await claimDigest(await walletClaimFor(this.p.c, key.toPublicKey().toString()));
     const ws = this.socket(relaySocketUrl(this.p.r, this.p.c, 'site', e, this.p.sc, wc));
     return new Promise<void>((resolve, reject) => {
       ws.onopen = () => {

@@ -209,7 +209,8 @@ describe('relay role claims (b-Aware 26 Oct 2026, N3-1/N3-2)', () => {
     await again!.getPublicKey({ identityKey: true });
     const reopened = new URL(relay.urls.filter((u) => u.includes('role=site')).pop()!);
     expect(reopened.searchParams.get('claim')).toBe(claim);
-    expect(reopened.searchParams.get('wc')).toBeNull(); // only a fresh QR channel carries the wallet binding
+    // A v1 pairing reopens with the same QR-bound digest, so a channel the relay re-created is bound to it too.
+    expect(reopened.searchParams.get('wc')).toBe(opened.searchParams.get('wc'));
   });
 
   it('a pairing stored before claims gets one on reconnect and keeps it', async () => {
@@ -279,7 +280,7 @@ describe('wallet claim v2 (session-bound wallet claim)', () => {
     expect(reopened.searchParams.get('claim')).toBe(stored.sc);
   });
 
-  it('with an older wallet or relay (no wcv) nothing changes: no wv, no wc on reconnect', async () => {
+  it('with an older wallet or relay (no wcv): no wv, and reconnects send the QR-bound claim digest', async () => {
     const relay = new FakeRelay(ORIGIN, false);
     const storage = mapStorage();
     const first = await pairBwalletX({
@@ -294,7 +295,11 @@ describe('wallet claim v2 (session-bound wallet claim)', () => {
     first.close();
     const again = await restorePairing({ storage, socket: relay.socket });
     await again!.getPublicKey({ identityKey: true });
-    expect(new URL(relay.urls.filter((u) => u.includes('role=site')).pop()!).searchParams.get('wc')).toBeNull();
+    // A v1 pairing re-binds nothing new: it sends the QR-bound claim's digest, so a re-created channel stays bound to it.
+    const reopened = new URL(relay.urls.filter((u) => u.includes('role=site')).pop()!);
+    const stored = JSON.parse(storage.m.get('bwalletx.connect.pairing.v1')!);
+    const sitePub = PrivateKey.fromHex(stored.s).toPublicKey().toString();
+    expect(reopened.searchParams.get('wc')).toBe(await claimDigest(await walletClaimFor(stored.c, sitePub)));
   });
 
   it('a v1 pairing learns wv from a sealed ready naming the session claim, and re-binds it from then on', async () => {
