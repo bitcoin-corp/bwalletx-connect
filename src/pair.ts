@@ -228,6 +228,10 @@ class Link {
       this.waiting.delete(msg.id);
       if (msg.error) w.reject(Object.assign(new Error(msg.error.message), { code: msg.error.code }));
       else w.resolve(msg.result);
+    } else if (msg.t === 'ready' && msg.wcv === 2 && this.p.wv !== 2) {
+      // A pairing that started as v1: the phone's relay now holds its session claim, so re-bind it from now on.
+      this.p = { ...this.p, wv: 2 };
+      this.persist();
     } else if (msg.t === 'close') {
       this.drop();
       this.failAll(new Error('bWalletX disconnected this site. Pair again.'));

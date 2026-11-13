@@ -280,4 +280,28 @@ describe('wallet claim v2 (session-bound wallet claim)', () => {
     await again!.getPublicKey({ identityKey: true });
     expect(new URL(relay.urls.filter((u) => u.includes('role=site')).pop()!).searchParams.get('wc')).toBeNull();
   });
+
+  it('a v1 pairing learns wv from a sealed ready with wcv 2 (the phone upgraded on resume) and re-binds from then on', async () => {
+    const relay = new FakeRelay(ORIGIN, false);
+    const storage = mapStorage();
+    let phone: ReturnType<typeof fakePhone> | null = null;
+    const first = await pairBwalletX({
+      origin: ORIGIN,
+      storage,
+      socket: relay.socket,
+      onCode: () => {},
+      onLink: (link) => setTimeout(() => (phone = fakePhone(link, relay.socket, PrivateKey.fromRandom(), { v2: true })), 0),
+    });
+    expect(JSON.parse(storage.m.get('bwalletx.connect.pairing.v1')!).wv).toBeUndefined();
+    await first.getPublicKey({ identityKey: true });
+    // The phone resumed, its relay bound the session claim, and it says so in a sealed ready.
+    phone!.ws!.send(JSON.stringify(await phone!.sealer!.seal({ t: 'ready', wcv: 2 })));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(JSON.parse(storage.m.get('bwalletx.connect.pairing.v1')!).wv).toBe(2);
+    first.close();
+    const again = await restorePairing({ storage, socket: relay.socket });
+    await again!.getPublicKey({ identityKey: true });
+    const reopened = new URL(relay.urls.filter((u) => u.includes('role=site')).pop()!);
+    expect(reopened.searchParams.get('wc')).toBe(await claimDigest(phone!.sessionClaim!));
+  });
 });
