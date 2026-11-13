@@ -53,6 +53,13 @@ export interface PairingOptions extends PairConnectionOptions {
   onLink: (link: string) => void;
   /** Show this 4-digit code. The wallet shows the same one; the user checks they match. */
   onCode: (code: string) => void;
+  /**
+   * Ask the user whether the wallet shows the same code, and resolve true only if they say it does. When set, pairing
+   * finishes only after both the wallet's Connect and a yes here; a no tells the wallet to unpair and rejects. Whoever
+   * joins the QR's channel first gets it, so someone who saw the QR before the user's phone scanned it would show a
+   * different code (and the user's phone would say the code was already used). pairingModal() always asks.
+   */
+  confirmCode?: (code: string) => boolean | Promise<boolean>;
   signal?: AbortSignal;
   /** Relay host. Default relay.bwallet.space. */
   relay?: string;
@@ -310,6 +317,7 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
     let walletKey = '';
     let v2 = false;
     let settled = false;
+    let answer: Promise<boolean> | null = null; // the user's reply to confirmCode, when the site asks
     const fail = (e: Error) => {
       if (settled) return;
       settled = true;
@@ -335,12 +343,26 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
         const s = await deriveSession(siteKey, walletKey, channel);
         sealer = new Sealer(s.key, 'site');
         opts.onCode(s.code);
+        if (opts.confirmCode) {
+          const ask = opts.confirmCode;
+          answer = new Promise<boolean>((r) => r(ask(s.code))).catch(() => false);
+          void answer.then(async (ok) => {
+            if (ok || settled || !sealer) return;
+            await sealer
+              .seal({ t: 'close', reason: 'codes did not match' })
+              .then((frame) => ws.send(JSON.stringify(frame)))
+              .catch(() => {});
+            fail(new Error("The codes didn't match, so nothing was connected. Show a new code and try again."));
+          });
+        }
         return;
       }
       if (!sealer || !isSealed(f)) return;
       const msg = await sealer.open(f);
       if (!msg) return;
       if (msg.t === 'ready') {
+        if (answer && !(await answer)) return; // a no unpairs the wallet and rejects (above)
+        if (settled) return;
         settled = true;
         clearTimeout(timer);
         const p: StoredPairing = { v: 1, c: channel, r: relay, s: siteKey.toHex(), k: walletKey, ...sealer.counters, pairedAt: Date.now(), sc: siteClaim, ...(v2 && { wv: 2 as const }) };

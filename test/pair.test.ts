@@ -57,6 +57,66 @@ describe('frame ordering', () => {
   });
 });
 
+describe('the site asks the user to confirm the code', () => {
+  const pair = (relay: FakeRelay, confirmCode: (code: string) => boolean | Promise<boolean>) => {
+    let phone: ReturnType<typeof fakePhone> | undefined;
+    const p = pairBwalletX({
+      origin: ORIGIN,
+      storage: null,
+      socket: relay.socket,
+      onCode: () => {},
+      confirmCode,
+      onLink: (link) => setTimeout(() => (phone = fakePhone(link, relay.socket, PrivateKey.fromRandom())), 0),
+    });
+    return { p, phone: () => phone! };
+  };
+
+  it('a yes finishes the pairing, asked with the code both sides show', async () => {
+    const asked: string[] = [];
+    const { p, phone } = pair(new FakeRelay(ORIGIN), (c) => (asked.push(c), true));
+    const wallet = await p;
+    expect(asked).toEqual([phone().code]);
+    await expect(wallet.getPublicKey({ identityKey: true })).resolves.toBeTruthy();
+  });
+
+  it("the wallet's Connect alone doesn't finish it: it waits for the user's yes", async () => {
+    let yes!: (ok: boolean) => void;
+    const { p, phone } = pair(new FakeRelay(ORIGIN), () => new Promise<boolean>((r) => (yes = r)));
+    let done = false;
+    void p.then(() => (done = true));
+    await new Promise((r) => setTimeout(r, 100));
+    expect(phone().sealer).toBeTruthy(); // the phone has tapped Connect (ready was sent)
+    expect(done).toBe(false);
+    yes(true);
+    await p;
+  });
+
+  it('a no rejects and tells the wallet to unpair', async () => {
+    const relay = new FakeRelay(ORIGIN);
+    const { p, phone } = pair(relay, () => false);
+    await expect(p).rejects.toThrow("The codes didn't match");
+    await new Promise((r) => setTimeout(r, 50)); // the phone opens the sealed frame asynchronously
+    expect(phone().closes).toEqual(['codes did not match']);
+  });
+
+  it('a no given after the wallet tapped Connect still rejects', async () => {
+    let no!: (ok: boolean) => void;
+    const { p, phone } = pair(new FakeRelay(ORIGIN), () => new Promise<boolean>((r) => (no = r)));
+    await new Promise((r) => setTimeout(r, 100));
+    no(false);
+    await expect(p).rejects.toThrow("The codes didn't match");
+    await new Promise((r) => setTimeout(r, 50)); // the phone opens the sealed frame asynchronously
+    expect(phone().closes).toEqual(['codes did not match']);
+  });
+
+  it('a confirmCode that throws counts as a no', async () => {
+    const { p } = pair(new FakeRelay(ORIGIN), () => {
+      throw new Error('ui gone');
+    });
+    await expect(p).rejects.toThrow("The codes didn't match");
+  });
+});
+
 describe('pairing survives a reload', () => {
   it('restorePairing reconnects with the stored key and counters', async () => {
     const relay = new FakeRelay(ORIGIN);

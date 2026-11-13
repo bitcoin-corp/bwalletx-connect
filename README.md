@@ -315,7 +315,9 @@ renderButton('#bwx-button', {
           onLink: async (link) => {
             panel.innerHTML = `<img src="${await QRCode.toDataURL(link)}" alt="Scan with bWalletX">`;
           },
-          onCode: (code) => panel.append(`Check bWalletX shows ${code}, then tap Connect.`),
+          onCode: (code) => panel.append(code),
+          // Ask, don't just show: pairing finishes only after a yes here and Connect in bWalletX.
+          confirmCode: (code) => confirm(`Does bWalletX show ${code}?`),
         },
       });
       await post('/auth/bwalletx/verify', { identityKey: r.identityKey, nonce: r.nonce, signature: r.signature });
@@ -350,7 +352,7 @@ It returns `{ identityKey, signature, nonce, method, wallet }`. Post the first t
 |---|---|
 | `findBwalletX(ms?)` | The extension or in-app wallet, or `null`. |
 | `discoverBwalletX(ms?)` | The same, plus `method` and `rdns`. |
-| `pairBwalletX({ onLink, onCode, storage?, signal?, socket?, origin?, relay? })` | Pair over the relay. Resolves with a wallet when the user taps Connect. |
+| `pairBwalletX({ onLink, onCode, confirmCode?, storage?, signal?, socket?, origin?, relay? })` | Pair over the relay. Resolves with a wallet when the user taps Connect, and, with `confirmCode`, says the codes match (a no unpairs and rejects). `pairingModal()` always asks. |
 | `restorePairing({ storage? })` | The wallet from a stored pairing, or `null`. It connects on the first call. |
 | `clearPairing()` | Delete the stored pairing without telling the wallet. |
 | `wallet.close()` / `wallet.forget()` | On a paired wallet: close the socket, or unpair and delete it. |

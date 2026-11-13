@@ -11,7 +11,7 @@ export function fakePhone(link: string, socket: SocketFactory, root: PrivateKey,
   const l = parsePairUrl(link);
   const P = PrivateKey.fromRandom();
   const pw = new ProtoWallet(root) as unknown as Record<string, (a: unknown) => Promise<unknown>>;
-  const state: { code?: string; ws?: SocketLike; sealer?: Sealer; requests: string[]; sessionClaim?: string } = { requests: [] };
+  const state: { code?: string; ws?: SocketLike; sealer?: Sealer; requests: string[]; closes: string[]; sessionClaim?: string } = { requests: [], closes: [] };
 
   const serve = (ws: SocketLike) => {
     ws.onmessage = async (ev) => {
@@ -42,6 +42,7 @@ export function fakePhone(link: string, socket: SocketFactory, root: PrivateKey,
       }
       if (!state.sealer || !isSealed(f)) return;
       const m = (await state.sealer.open(f)) as PairMessage | null;
+      if (m?.t === 'close') state.closes.push(m.reason);
       if (m?.t !== 'req') return;
       state.requests.push(m.action);
       const result = await pw[m.action].call(pw, m.params);

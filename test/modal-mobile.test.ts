@@ -61,3 +61,41 @@ describe('pairingModal on a phone', () => {
     d.close();
   });
 });
+
+describe('pairingModal asks whether the codes match', () => {
+  const buttons = () => Array.from(document.querySelectorAll('.bwx-confirm button')) as HTMLButtonElement[];
+
+  it('Yes, it matches resolves true and asks for Connect in the wallet', async () => {
+    const m = pairingModal({ mode: 'qr' });
+    m.onLink(LINK);
+    m.onCode('4821');
+    const answer = m.confirmCode!('4821');
+    expect(document.querySelector('.bwx-box p')!.textContent).toBe('Does bWalletX show this code?');
+    expect(document.querySelector('.bwx-code')!.textContent).toBe('4821');
+    expect(buttons().map((b) => b.textContent)).toEqual(['No', 'Yes, it matches']);
+    buttons()[1].click();
+    await expect(answer).resolves.toBe(true);
+    expect(buttons()).toHaveLength(0);
+    m.close();
+  });
+
+  it('No resolves false; Cancel before answering resolves false too', async () => {
+    const m = pairingModal({ mode: 'app' });
+    m.onLink(LINK);
+    const a = m.confirmCode!('4821');
+    buttons()[0].click();
+    await expect(a).resolves.toBe(false);
+    m.close();
+
+    const n = pairingModal({ mode: 'qr' });
+    n.onLink(LINK);
+    const b = n.confirmCode!('1234');
+    (Array.from(document.querySelectorAll('button.bwx-btn')).find((x) => x.textContent === 'Cancel') as HTMLButtonElement).click();
+    await expect(b).resolves.toBe(false);
+  });
+
+  it('with no modal on screen it answers no', async () => {
+    const m = pairingModal();
+    expect(await m.confirmCode!('4821')).toBe(false);
+  });
+});
