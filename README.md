@@ -435,7 +435,7 @@ Since 0.5.4 the site side sends a role claim to the relay on every connect, and 
 </script>
 ```
 
-This build includes `@bsv/sdk` (the whole build is about 530 KB minified, 160 KB gzipped). The server functions are not in it.
+This build includes `@bsv/sdk` and `qrcode-generator` (the whole build is about 555 KB minified, 170 KB gzipped). The server functions are not in it. It starts with a licence banner; if you self-host the file, keep `THIRD_PARTY_LICENSES.md` and `third-party/bsv-sdk/` from the package with it (`@bsv/sdk`'s notices ask for that).
 
 ## bApp shell
 

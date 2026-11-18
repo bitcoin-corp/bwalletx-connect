@@ -108,7 +108,9 @@
     "BRAND.md",
     "TRADEMARKS.md",
     "LICENSE",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "THIRD_PARTY_LICENSES.md",
+    "third-party"
   ],
   "keywords": [
     "bsv",
@@ -134,8 +136,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:live": "LIVE_RELAY=1 vitest run test/live-relay.test.ts",
-    "prepublishOnly": "pnpm typecheck && pnpm lint && pnpm test && pnpm build",
-    "lint": "eslint src test"
+    "prepublishOnly": "node scripts/third-party-licenses.mjs --check && pnpm typecheck && pnpm lint && pnpm test && pnpm build",
+    "lint": "eslint src test",
+    "licenses": "node scripts/third-party-licenses.mjs"
   },
   "peerDependencies": {
     "next": ">=14",

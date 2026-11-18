@@ -1,4 +1,25 @@
+import { readFileSync } from 'node:fs';
 import { defineConfig } from 'tsup';
+
+const version = (pkg: string): { version: string; license: string } =>
+  JSON.parse(readFileSync(new URL(`./node_modules/${pkg}/package.json`, import.meta.url), 'utf8'));
+const own = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string };
+const sdk = version('@bsv/sdk');
+const qr = version('qrcode-generator');
+const read = (path: string) => readFileSync(new URL(`./node_modules/${path}`, import.meta.url), 'utf8');
+const sdkNotice = read('@bsv/sdk/NOTICE').trim().replace(/\s+/g, ' ').replace(/\*\//g, '');
+const qrCopyright = /Copyright \(c\) [^\n]+/.exec(read('qrcode-generator/qrcode.js'))?.[0].trim() ?? 'Copyright (c) Kazuhiko Arase';
+
+/**
+ * Licence banner for the build that bundles @bsv/sdk and qrcode-generator. Read from the installed packages, so it
+ * names what was actually bundled. The full notices ship in the package: THIRD_PARTY_LICENSES.md, third-party/.
+ */
+const GLOBAL_BANNER =
+  `/*! @bwalletx/connect ${own.version} | MIT | https://github.com/bitcoin-corp/bwalletx-connect\n` +
+  ` * Bundles @bsv/sdk ${sdk.version} (${sdk.license}; NOTICE: ${sdkNotice}) and\n` +
+  ` * qrcode-generator ${qr.version} (${qr.license}; ${qrCopyright}).\n` +
+  ` * Their licences and notices (@bsv/sdk's LICENSE, NOTICE, PATENTS, THIRD_PARTY_NOTICES.md, LICENSES/) are in\n` +
+  ` * THIRD_PARTY_LICENSES.md and third-party/bsv-sdk/ of the @bwalletx/connect npm package. */`;
 
 export default defineConfig([
   {
@@ -21,6 +42,7 @@ export default defineConfig([
     format: ['iife'],
     globalName: 'bWalletXConnect',
     platform: 'browser',
+    banner: { js: GLOBAL_BANNER },
     minify: true,
     sourcemap: true,
     target: 'es2020',
