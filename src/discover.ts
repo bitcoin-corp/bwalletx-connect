@@ -121,9 +121,10 @@ export const parentOrigin = (): string | null => {
 
 /**
  * How long one wallet call over XDM may wait for the parent's answer, ms, before it fails with "XDM wallet response
- * timed out." (@bsv/sdk 2.x XDM `responseTimeout`; without it a call the parent never answers waits forever and its
- * listener is never removed). Long enough to read and approve a payment sheet. A timed-out pay() reports
- * `maybeSent: true`, because the wallet may still have sent it.
+ * timed out." (@bsv/sdk 4.x XDM `responseTimeout`, at most 1 hour; without it a call the parent never answers waits
+ * forever and its listener is never removed). On an answer, an error or the timeout, the listener is removed and the
+ * timer cleared. Long enough to read and approve a payment sheet. A timed-out pay() reports `maybeSent: true`, because
+ * the wallet may still have sent it: reconcile with verifyPayment before offering a retry.
  */
 export const XDM_RESPONSE_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -131,9 +132,11 @@ export const XDM_RESPONSE_TIMEOUT_MS = 10 * 60 * 1000;
  * The parent frame's wallet over BRC-100 XDM, or null when the parent is not bWalletX (BWALLETX_PARENT_ORIGINS) or
  * does not answer within `ms`. Messages go to that exact origin and only its answers are taken.
  *
- * The wallet is connect's own @bsv/sdk 2.x WalletClient over a 2.x XDM substrate, whatever @bsv/sdk version the app
- * uses: every argument is validated before it is sent, every answer is validated (and, for createAction/signAction,
- * checked against the request) before it is returned, and each call times out after XDM_RESPONSE_TIMEOUT_MS.
+ * The wallet is connect's own @bsv/sdk 4.x WalletClient over a 4.x XDM substrate (connect's dependency, ^4.0.1),
+ * whatever @bsv/sdk version the app uses: every argument is validated before it is sent, every answer is validated
+ * (and, for createAction/signAction, checked against the request) before it is returned, only a trusted message from
+ * window.parent at exactly `origin` with the call's own id is taken as the answer, and each call times out after
+ * XDM_RESPONSE_TIMEOUT_MS.
  */
 export async function probeXdm(ms = 1200, allowed: readonly string[] = BWALLETX_PARENT_ORIGINS): Promise<WalletInterface | null> {
   const origin = parentOrigin();
