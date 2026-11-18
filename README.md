@@ -9,10 +9,18 @@ The full protocol is described at https://bwalletx.com/connect.md. This package 
 ## Install
 
 ```sh
-pnpm add @bwalletx/connect @bsv/sdk
+pnpm add @bwalletx/connect
 ```
 
-`@bsv/sdk` (2.2 or later, 2.x or 3.x) is a peer dependency.
+### Requirements
+
+- **Node 20 or later** on the server; any current browser.
+- **No `@bsv/sdk` needed from you.** Since 0.8.0, connect depends on its own `@bsv/sdk` (^4.0.1) instead of using your app's copy, so your app can stay on any version (1.9, 2.x or 4.x). The wallet clients connect builds itself (in the bWalletX frame over XDM, desktop wallets with `probeLocal`, and Metanet Desktop via `metanetOption()`) are 4.x `WalletClient`s whatever your version: arguments are validated before they reach the wallet, answers are validated (createAction/signAction answers checked against the request), and every XDM call times out after `XDM_RESPONSE_TIMEOUT_MS` (10 minutes) instead of waiting forever. Wallets the page already has (the extension's announcement, `window.CWI`, a phone pairing) are used as they are.
+  - App on **4.x**: the package manager shares one copy (pnpm, checked, resolves connect's ^4.0.1 to the app's 4.x, even a pinned 4.0.1). No extra size.
+  - App on **1.9 or 2.x**: you get two copies. In a browser bundle connect's copy adds about 417 KB minified (about 125 KB gzipped) on top of yours. If that matters, load the sign-in code lazily (`import('@bwalletx/connect')` on click).
+- **Nothing crosses as an `@bsv/sdk` object.** Pass wallets as any BRC-100 wallet: the `Brc100Wallet` type accepts a `WalletInterface` from any `@bsv/sdk` version, or a plain object with the same methods. Everything else goes in and out as strings and byte arrays: txids, hex, BEEF/Atomic BEEF bytes, DER signatures as `number[]`. Don't `instanceof`-check what connect returns against your own `@bsv/sdk` classes.
+- Wallets connect hands back (`useBwalletX().wallet`, `SignInResult.wallet`, `findBwalletX()`) are typed as connect's own (4.x) `WalletInterface`. In a codebase typed against 1.9, cast before passing one to 1.9-typed code: 4.x types byte results as `number[] | Uint8Array`, 1.9 as `number[]`.
+- `react` 18+ and `next` 14+ are optional peers, only for `/react` and `/next`.
 
 ## Next.js quick start (App Router)
 
@@ -181,7 +189,7 @@ const chosen = option ?? (reason === 'chooser' ? await chooseWallet(list) : null
 
 `BwalletXProvider fastPath={false}` (or `runConnect({ fastPath: false })`) restores the 0.5.5 picker rule. `connect({ chooser: true })` is the "Other wallets" link. `<bwalletx-signin other-wallets="auto|on|off">` controls the link (auto: shown at lg/md when the element signs in).
 
-### Returning visitors (0.6.0)
+### Returning visitors (0.6.0 line, first published in 0.7.0)
 
 After a sign-in the user explicitly picked, the wallet **type** is remembered for the origin (`localStorage['bwx:wallet']`, e.g. `{ "type": "io.yours", "substrate": "injected" }`; never a key). The next tap goes straight to that wallet, with no chooser. On load nothing that could prompt fires: with a live session the provider picks the remembered wallet up by discovery alone, so `pay`/`tip` work after a reload; without one, the next tap connects. If the remembered wallet isn't bWalletX, the element shows **Some features need bWalletX · Switch** (and "Switch to bWalletX" in its menu); `useBwalletX()` exposes `needsBwalletX` and `switchToBwalletX()` for your own UI. Disconnect forgets the choice. Turn it off with `rememberChoice={false}` / `autoConnect={false}` on the provider or `remember="off"` on the element.
 
@@ -427,7 +435,7 @@ Since 0.5.4 the site side sends a role claim to the relay on every connect, and 
 </script>
 ```
 
-This build includes `@bsv/sdk` (about 125 KB minified). The server functions are not in it.
+This build includes `@bsv/sdk` (the whole build is about 530 KB minified, 160 KB gzipped). The server functions are not in it.
 
 ## bApp shell
 

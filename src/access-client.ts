@@ -14,6 +14,7 @@ import {
   type HoldingProof,
 } from './access.js';
 import { connectBwalletX, type SignInOptions } from './signin.js';
+import type { Brc100Wallet } from './wallet-like.js';
 
 /** The challenge route's answer (createAccessChallenge). */
 export interface AccessChallengeLike {
@@ -25,7 +26,8 @@ export interface RequestAccessOptions {
   challenge: (identityKey: string) => Promise<AccessChallengeLike>;
   /** Post the signed response to your server. Throw AccessError (or return an error body) to refuse. */
   verify?: (response: AccessResponse) => Promise<unknown>;
-  wallet?: WalletInterface;
+  /** Use this wallet (any BRC-100 wallet, any @bsv/sdk version) instead of looking for one. */
+  wallet?: Brc100Wallet;
   pairing?: SignInOptions['pairing'];
   discoverMs?: number;
   /** Basket holding BSV-21 outputs. Default 'bsv21' (bWalletX, 1Sat wallets). */
@@ -69,7 +71,7 @@ function hash160FromP2pkh(script: string): string | null {
  * Sign the challenge with every key that locks an output of `tokenId` in the wallet's token basket.
  * Outputs whose derivation can't be reproduced are skipped (the server counts only what is proven).
  */
-export async function proveHoldings(wallet: WalletInterface, challenge: string, tokenId: string, basket = 'bsv21'): Promise<HoldingProof[]> {
+export async function proveHoldings(wallet: Brc100Wallet, challenge: string, tokenId: string, basket = 'bsv21'): Promise<HoldingProof[]> {
   const bare = tokenId.replace(/^bsv21:/, '');
   const list = await wallet.listOutputs({ basket, include: 'locking scripts', includeCustomInstructions: true, limit: 10000 });
   const byKey = new Map<string, HoldingProof>();

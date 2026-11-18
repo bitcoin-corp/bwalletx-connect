@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@bsv/sdk':
+        specifier: ^4.0.1
+        version: 4.1.1
       next:
         specifier: '>=14'
         version: 16.4.0(@types/node@26.6.4)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -15,9 +18,15 @@ importers:
         specifier: ^1.5.2
         version: 1.5.2
     devDependencies:
-      '@bsv/sdk':
-        specifier: ^2.8.11
-        version: 2.8.11
+      '@bsv/sdk-v1':
+        specifier: npm:@bsv/sdk@1.9.31
+        version: '@bsv/sdk@1.9.31'
+      '@bsv/sdk-v2':
+        specifier: npm:@bsv/sdk@2.8.11
+        version: '@bsv/sdk@2.8.11'
+      '@bsv/sdk-v4':
+        specifier: npm:@bsv/sdk@4.0.1
+        version: '@bsv/sdk@4.0.1'
       '@eslint/js':
         specifier: ^9.39.5
         version: 9.39.5
@@ -57,8 +66,19 @@ importers:
 
 packages:
 
+  '@bsv/sdk@1.9.31':
+    resolution: {integrity: sha512-iPXwZGCe1JJhG8zUmyqdmipeWw5qFTfIa2yKSp4DrrWZlWcK2cyA8XY0zHOH0QkSB6zMi/aidJ1ZCOy8kBoGMQ==}
+
   '@bsv/sdk@2.8.11':
     resolution: {integrity: sha512-Kt70E52bGTCayebmKQJCmEKCFwwS1MOUJ4Q4mKLCadsktVpZMv4NoWjvEbO7VDIw3g5zo8RMJsTuRy5zFI77og==}
+    engines: {node: '>=22'}
+
+  '@bsv/sdk@4.0.1':
+    resolution: {integrity: sha512-aLaRa38h+ck5OhqRlNiQ9oUIOuB+vSZwWzkgWlXzr/9qwK5F0pbtog5PM+1Wo2GNIzxVAEnvxYCLL5SU55cW0w==}
+    engines: {node: '>=22'}
+
+  '@bsv/sdk@4.1.1':
+    resolution: {integrity: sha512-s/ComOkwz/Z8pyC2JOJUqazSwNNNJIxgb+UuULfsuTcJKzw3DUoXYA5HLzN7Bj+nYILUGAqc1CSwSMF7g22ZSw==}
     engines: {node: '>=22'}
 
   '@emnapi/runtime@1.11.3':
@@ -1669,7 +1689,13 @@ packages:
 
 snapshots:
 
+  '@bsv/sdk@1.9.31': {}
+
   '@bsv/sdk@2.8.11': {}
+
+  '@bsv/sdk@4.0.1': {}
+
+  '@bsv/sdk@4.1.1': {}
 
   '@emnapi/runtime@1.11.3':
     dependencies:

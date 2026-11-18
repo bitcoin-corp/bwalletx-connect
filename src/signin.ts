@@ -1,6 +1,7 @@
 import type { WalletInterface, WalletProtocol } from '@bsv/sdk';
 import { discoverBwalletX, DEFAULT_DISCOVER_MS } from './discover.js';
 import { pairBwalletX, restorePairing, type PairingOptions } from './pair.js';
+import { asWalletInterface, type Brc100Wallet } from './wallet-like.js';
 
 /** Security level 2, a protocol name used for nothing else. */
 export const LOGIN_PROTOCOL: WalletProtocol = [2, 'bwallet sign in'];
@@ -45,8 +46,11 @@ export interface SignInOptions {
   challengeNeedsIdentityKey?: boolean;
   /** Skip waitForAuthentication before signing (the provider already waited). Default false. */
   skipWaitForAuthentication?: boolean;
-  /** Use this wallet instead of looking for one. `method` is then 'wallet'. */
-  wallet?: WalletInterface;
+  /**
+   * Use this wallet instead of looking for one. `method` is then 'wallet'. Any BRC-100 wallet, from any @bsv/sdk
+   * version (Brc100Wallet); it is used as is, not wrapped.
+   */
+  wallet?: Brc100Wallet;
   /** How to show the QR and code if pairing is needed. Without it, pairing is not tried. */
   pairing?: PairingOptions;
   /** Reuse a pairing stored by an earlier sign-in before showing a new QR. Default true. */
@@ -80,7 +84,7 @@ export async function connectBwalletX(
   };
   if (opts.wallet) {
     status('opening');
-    return { wallet: opts.wallet, method: 'wallet' };
+    return { wallet: asWalletInterface(opts.wallet), method: 'wallet' };
   }
   status('finding');
   const found = await discoverBwalletX(opts.discoverMs ?? DEFAULT_DISCOVER_MS);
@@ -107,7 +111,7 @@ export async function connectBwalletX(
  * unconditional waitForAuthentication is not free: bWalletX answers it by fetching the site's manifest.json and, when
  * that asks for permissions, shows a separate sheet, once per call.
  */
-export async function waitIfLocked(wallet: WalletInterface): Promise<void> {
+export async function waitIfLocked(wallet: Brc100Wallet): Promise<void> {
   let ok = false;
   try {
     ok = !!(await wallet.isAuthenticated({}))?.authenticated;

@@ -2,7 +2,8 @@ import { defineConfig } from 'tsup';
 
 export default defineConfig([
   {
-    // npm: ESM + CJS + types. @bsv/sdk and react stay peer dependencies.
+    // npm: ESM + CJS + types. @bsv/sdk (a dependency since 0.8.0) stays external: the app's installer resolves connect's
+    // own copy, and dedupes it with the app's when the versions are compatible. react/next are optional peers.
     entry: {
       index: 'src/index.ts', server: 'src/server.ts', next: 'src/next.ts', element: 'src/define.ts', react: 'src/react.ts',
       shell: 'src/shell/index.ts', 'shell-react': 'src/shell/react.ts',

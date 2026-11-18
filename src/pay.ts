@@ -3,7 +3,8 @@
  * BRC-100 wallet. Each helper asks the wallet once; it never retries a spend. If a call fails
  * the error says whether the wallet may have sent anything (`maybeSent`).
  */
-import { P2PKH, PublicKey, Transaction, Utils, type WalletInterface } from '@bsv/sdk';
+import { P2PKH, PublicKey, Transaction, Utils } from '@bsv/sdk';
+import type { Brc100Wallet } from './wallet-like.js';
 
 /** BRC-29 payment protocol id. */
 export const BRC29_PROTOCOL: [2, string] = [2, '3241645161d8'];
@@ -91,9 +92,10 @@ export class PaymentError extends Error {
 export interface LegacyPayer {
   pay(req: PayRequest & { sats: number }): Promise<PayResult>;
 }
-export type PaySource = WalletInterface | LegacyPayer;
+/** Any BRC-100 wallet (from any @bsv/sdk version: Brc100Wallet), or a LegacyPayer. */
+export type PaySource = Brc100Wallet | LegacyPayer;
 
-const isLegacy = (s: PaySource): s is LegacyPayer => typeof (s as LegacyPayer).pay === 'function' && typeof (s as WalletInterface).createAction !== 'function';
+const isLegacy = (s: PaySource): s is LegacyPayer => typeof (s as LegacyPayer).pay === 'function' && typeof (s as Brc100Wallet).createAction !== 'function';
 
 export const isIdentityKeyHex = (s: string) => /^0[23][0-9a-fA-F]{64}$/.test(s);
 export const isPaymail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
@@ -180,7 +182,7 @@ export async function resolvePaymailP2P(paymail: string, sats: number, f: typeof
   };
 }
 
-async function runAction(wallet: WalletInterface, description: string, outputs: PayOutput[], labels?: string[]) {
+async function runAction(wallet: Brc100Wallet, description: string, outputs: PayOutput[], labels?: string[]) {
   try {
     return await wallet.createAction({
       description: describe(description),

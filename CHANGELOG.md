@@ -1,6 +1,19 @@
 # Changelog
 
-## 0.7.0 (unreleased)
+## 0.8.0 (unreleased)
+
+`@bsv/sdk` 4.x as connect's own dependency, on top of 0.7.0. (This work was first prepared as "0.6.0" on a branch from 0.5.5; that number was already used for the auto-connect line below, and npm's `latest` is 0.7.0, so it ships as 0.8.0.)
+
+- **`@bsv/sdk` is now connect's own dependency (^4.0.1), not a peer.** Apps that cannot move off @bsv/sdk 1.9 (b0ase.com is on 1.9.31: 2.x signing requires `input.sourceTXID === sourceTransaction.id()`, which breaks its stand-in source transactions and js-1sat-ord) now run connect on its own 4.x copy instead of their 1.9 one: the wallet clients connect builds (the XDM wallet in the bWalletX frame, `probeLocal` desktop wallets, and 0.7.0's Metanet Desktop client, `metanetOption()` / `WalletClient('json-api')`) are 4.x `WalletClient`s, with argument and answer validation. Wallets the page already has (extension announcement, `window.CWI`, phone pairing) are used as they are, as before. 4.x, not 2.x: it is npm's `latest` (4.1.1), the current `@1sat/*` packages need ^4.0.0, and `WalletClient` and the XDM substrate are byte-for-byte the same as 2.8.11 (the validation changes since then cover certificates and balance queries only).
+  - The peer is removed, not kept as an optional types-only peer: with any `@bsv/sdk` peer present, pnpm links connect to the app's copy (checked: a 1.9.31 host resolved connect to 1.9.31, a 2.8.11 host to 2.8.11), which is what this change exists to stop.
+  - Apps on 4.x share one copy. Apps on 1.9 or 2.x get two: about 417 KB minified (about 125 KB gzipped) more in a browser bundle. See README, Requirements.
+- **XDM calls time out.** In the bWalletX frame, every wallet call over XDM now fails after `XDM_RESPONSE_TIMEOUT_MS` (10 minutes, new export) if the parent never answers, instead of waiting forever. A timed-out `pay()` reports `maybeSent: true`.
+- **`Brc100Wallet`** (new type): every public parameter that takes a wallet (`SignInOptions.wallet`, `waitIfLocked`, `pay`/`tip`/`buyToken` via `PaySource`, `proveHoldings`, `RequestAccessOptions.wallet`, `brc100Option`, `cwiIsAnnounced`, and 0.7.0's `MetanetOptions.make` for `metanetOption`, `connectMetanetDesktop`, `trySilentMetanet` and `runSilentMetanet`, which also needs `getVersion`) accepts any BRC-100 wallet from any `@bsv/sdk` version, or a plain object with the same methods. Widened, not changed: everything that compiled before still does. A wallet you pass in comes back as the same object.
+- **Types now come from connect's own `@bsv/sdk`.** Before, connect's `.d.ts` files resolved `@bsv/sdk` to the app's copy; now they resolve to connect's 4.x. Wallets connect returns are typed as 4.x `WalletInterface`; a 1.9-typed codebase that assigns one to its own `WalletInterface` type needs a cast. This is why the version is a minor bump.
+- No `@bsv/sdk` object crosses the API in either direction (audit in this release, 0.7.0 additions included): payments, signatures, keys and BEEF go in and out as strings and byte arrays, as before.
+- Docs: the one-script-tag build is about 530 KB minified (160 KB gzipped), not 125 KB.
+
+## 0.7.0 (published 6 Nov 2026)
 
 **Use Metanet Desktop or another BRC-100 wallet** (owner, 6 Nov 2026: "ship a new one now with the metanet option"), with the rules of the live bChatX door (bit-sign 73f7d644).
 
@@ -15,7 +28,7 @@
 - **Security review fixes:** no desktop wallet on localhost (Metanet on 3321, Cicada on 3301, `probeLocal`, a remembered 0.6.0 "Desktop wallet") is ever picked without its own tap: `autoChoice` and `matchRemembered` skip them (`isLocalDesktop`, `isLocalDesktopType`); a remembered `desktop` now plans `'none'`. Identity keys count as known only after a verified sign-in or a session match. `logoutUrl` / `logout-url` is required with `verifyUrl` (dev `console.warn`, `warnIfNoLogout`).
 - `isTouchDevice` moved to its own module (still exported from the package root and `modal`).
 
-## 0.6.0 (unreleased)
+## 0.6.0 (never published: these changes first shipped in 0.7.0)
 
 Auto-connect for returning visitors (RB, 5 Nov 2026: "go on auto-connect"), within the wallet-choice rules of 0.5.6.
 
@@ -28,7 +41,7 @@ Auto-connect for returning visitors (RB, 5 Nov 2026: "go on auto-connect"), with
 - `<bwalletx-button>` shares the record: a 0.5.5 `bwx:connected` entry (which held the identity key) becomes `{ type: 'bwalletx' }` on load and the key is deleted (`migrateConnectedKey`); a tap on Connect remembers the type; Disconnect forgets it. Still zero wallet calls on load.
 - The one-sheet sign-in is unchanged: the identity key and the signature still go to the wallet together.
 
-## 0.5.6 (unreleased)
+## 0.5.6 (published 6 Nov 2026)
 
 Wallet choice (RB, 5 Nov 2026: bWalletX is the default on our sites; no other wallet may take the sign-in flow). A fix: sites showed their own chooser even when only bWalletX was present, so users never saw the wallet sheet, and a wallet that held `window.CWI` was treated as bWalletX.
 

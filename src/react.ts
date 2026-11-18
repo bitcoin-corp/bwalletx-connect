@@ -661,6 +661,7 @@ export function useBwalletXAccount(): BwalletXAccount {
 
 export { handcashAdapter, brc100Option, pairingOption, discoverWallets, autoChoice } from './wallets.js';
 export type { WalletOption, ConnectedWallet, HandCashAdapterOptions } from './wallets.js';
+export type { Brc100Wallet } from './wallet-like.js';
 export { PaymentError } from './pay.js';
 export type { PayRequest, PayResult, BuyTokenRequest, PayOptions } from './pay.js';
 /** Alias with the casing used by <BwalletxSignin>. */

@@ -20,6 +20,7 @@
  *      calls go one at a time: two prompts at once is how Metanet Desktop froze on a "Trust" sheet (6 Nov 2026).
  */
 import { WalletClient, type WalletInterface } from '@bsv/sdk';
+import { asWalletInterface, type Brc100Wallet } from './wallet-like.js';
 import { rememberedIdentity } from './account.js';
 import { isTouchDevice } from './device.js';
 import { waitIfLocked } from './signin.js';
@@ -82,12 +83,15 @@ export interface MetanetOptions {
   originator?: string;
   /** How long Metanet has to answer getVersion. Default METANET_ANSWER_MS. */
   timeoutMs?: number;
-  /** Tests and custom hosts: stands in for `new WalletClient('json-api', originator)`. */
-  make?: () => WalletInterface;
+  /**
+   * Tests and custom hosts: stands in for `new WalletClient('json-api', originator)`. Any BRC-100 wallet from any
+   * @bsv/sdk version (Brc100Wallet) that also answers getVersion; it is used as is, not wrapped.
+   */
+  make?: () => Brc100Wallet & { getVersion(args: object, originator?: string): Promise<{ version: string }> };
 }
 
 function client(o: MetanetOptions): WalletInterface {
-  if (o.make) return o.make();
+  if (o.make) return asWalletInterface(o.make());
   const originator = o.originator ?? (typeof location !== 'undefined' && location.host ? location.host : undefined);
   // Pinned: 'json-api' is HTTPWalletJSON on localhost:3321. It never falls back to an extension or window.CWI.
   return new WalletClient('json-api', originator);

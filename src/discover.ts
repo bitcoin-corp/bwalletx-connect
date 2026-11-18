@@ -120,14 +120,26 @@ export const parentOrigin = (): string | null => {
 };
 
 /**
+ * How long one wallet call over XDM may wait for the parent's answer, ms, before it fails with "XDM wallet response
+ * timed out." (@bsv/sdk 2.x XDM `responseTimeout`; without it a call the parent never answers waits forever and its
+ * listener is never removed). Long enough to read and approve a payment sheet. A timed-out pay() reports
+ * `maybeSent: true`, because the wallet may still have sent it.
+ */
+export const XDM_RESPONSE_TIMEOUT_MS = 10 * 60 * 1000;
+
+/**
  * The parent frame's wallet over BRC-100 XDM, or null when the parent is not bWalletX (BWALLETX_PARENT_ORIGINS) or
  * does not answer within `ms`. Messages go to that exact origin and only its answers are taken.
+ *
+ * The wallet is connect's own @bsv/sdk 2.x WalletClient over a 2.x XDM substrate, whatever @bsv/sdk version the app
+ * uses: every argument is validated before it is sent, every answer is validated (and, for createAction/signAction,
+ * checked against the request) before it is returned, and each call times out after XDM_RESPONSE_TIMEOUT_MS.
  */
 export async function probeXdm(ms = 1200, allowed: readonly string[] = BWALLETX_PARENT_ORIGINS): Promise<WalletInterface | null> {
   const origin = parentOrigin();
   if (!origin || !allowed.includes(origin)) return null;
   try {
-    const w = new WalletClient(new XDM(origin) as unknown as WalletInterface);
+    const w = new WalletClient(new XDM(origin, XDM_RESPONSE_TIMEOUT_MS) as unknown as WalletInterface);
     const ok = await Promise.race([
       w.isAuthenticated({}).then(
         () => true,

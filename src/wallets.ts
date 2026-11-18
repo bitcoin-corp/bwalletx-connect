@@ -8,6 +8,7 @@ import { BWALLETX_RDNS, RDNS_EXTENSION, RDNS_MOBILE, isFramed, probeXdm } from '
 import { pairBwalletX, restorePairing, type PairingOptions } from './pair.js';
 import type { PaySource } from './pay.js';
 import { waitIfLocked } from './signin.js';
+import { asWalletInterface, type Brc100Wallet } from './wallet-like.js';
 
 export type WalletKind = 'brc100' | 'pairing' | 'handcash' | 'custom';
 
@@ -68,11 +69,12 @@ async function brc100Connected(wallet: WalletInterface, o: Pick<WalletOption, 'i
   return { wallet, payer: wallet, identityKey: publicKey, optionId: o.id, kind: o.kind };
 }
 
-/** Wrap any BRC-100 wallet as a picker option. */
+/** Wrap any BRC-100 wallet (any @bsv/sdk version) as a picker option. */
 export function brc100Option(
-  wallet: WalletInterface,
+  w: Brc100Wallet,
   info: { id: string; name: string; icon?: string; rdns?: string; isBwalletX?: boolean; substrate?: Substrate },
 ): WalletOption {
+  const wallet = asWalletInterface(w);
   const opt: WalletOption = {
     id: info.id,
     name: info.name,
@@ -175,7 +177,7 @@ async function probe(substrate: 'json-api' | 'Cicada', ms: number): Promise<Wall
  * True when window.CWI is a wallet that already announced itself, so the picker must not list it twice. bWalletX
  * (extension and in-app) sets window.CWI to the very object it announces; the in-app browser is matched by rdns too.
  */
-export function cwiIsAnnounced(cwi: WalletInterface, announced: WalletOption[]): boolean {
+export function cwiIsAnnounced(cwi: Brc100Wallet, announced: WalletOption[]): boolean {
   return announced.some((o) => o.wallet === cwi || o.rdns === RDNS_MOBILE);
 }
 

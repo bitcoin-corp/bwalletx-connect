@@ -1,5 +1,6 @@
-export { findBwalletX, discoverBwalletX, prewarmBwalletX, bindPrewarm, isFramed, DEFAULT_DISCOVER_MS, BWALLETX_RDNS, RDNS_EXTENSION, RDNS_MOBILE } from './discover.js';
+export { findBwalletX, discoverBwalletX, prewarmBwalletX, bindPrewarm, isFramed, DEFAULT_DISCOVER_MS, XDM_RESPONSE_TIMEOUT_MS, BWALLETX_RDNS, RDNS_EXTENSION, RDNS_MOBILE } from './discover.js';
 export type { FoundWallet, FoundBy } from './discover.js';
+export type { Brc100Wallet } from './wallet-like.js';
 export { pairBwalletX, restorePairing, clearPairing } from './pair.js';
 export type { PairingOptions, PairConnectionOptions, PairStorage, PairedWallet, SocketLike, SocketFactory } from './pair.js';
 export { signInWithBwalletX, signInAndVerify, connectBwalletX, waitIfLocked, challengeWantsIdentityKey, LOGIN_PROTOCOL } from './signin.js';
