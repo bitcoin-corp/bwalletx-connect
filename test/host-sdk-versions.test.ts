@@ -323,4 +323,111 @@ describe('in the bWalletX frame, the wallet is connect’s own @bsv/sdk WalletCl
     expect(err).toMatchObject({ code: 'WALLET_ERROR', maybeSent: true });
     expect(String(err.cause?.message)).toMatch(/timed out/);
   });
+
+  /** A CWI answer as a MessageEvent, from wherever the test says. */
+  function reply(id: string, result: unknown, from: { origin: string; source: unknown; isTrusted?: boolean }) {
+    const ev = new MessageEvent('message', { data: { type: 'CWI', isInvocation: false, id, status: 'success', result }, origin: from.origin });
+    Object.defineProperty(ev, 'source', { value: from.source });
+    Object.defineProperty(ev, 'isTrusted', { value: from.isTrusted ?? true });
+    return ev;
+  }
+  const ORIGIN_OK = 'capacitor://localhost';
+
+  it('ATTACK: answers from another origin, another window or an untrusted event are ignored; the parent’s is taken', async () => {
+    const real = Own.PrivateKey.fromRandom().toPublicKey().toString();
+    const forged = Own.PrivateKey.fromRandom().toPublicKey().toString();
+    const parent = parentFrame(authOnly);
+    const found = await discoverBwalletX(50);
+    const other = { postMessage: vi.fn() };
+    parent.postMessage.mockImplementation((msg: { id: string; call: string }) => {
+      if (msg.call !== 'getPublicKey') return;
+      queueMicrotask(() => {
+        // The same id, a well-formed answer, a forged key: wrong origin, wrong window, then untrusted (synthetic).
+        window.dispatchEvent(reply(msg.id, { publicKey: forged }, { origin: 'https://evil.example', source: parent }));
+        window.dispatchEvent(reply(msg.id, { publicKey: forged }, { origin: ORIGIN_OK, source: other }));
+        window.dispatchEvent(reply(msg.id, { publicKey: forged }, { origin: ORIGIN_OK, source: parent, isTrusted: false }));
+        window.dispatchEvent(reply(msg.id, { publicKey: real }, { origin: ORIGIN_OK, source: parent }));
+      });
+    });
+    await expect(found!.wallet.getPublicKey({ identityKey: true })).resolves.toEqual({ publicKey: real });
+  });
+
+  it('ATTACK: a call answered only from another origin never resolves with that answer; it times out', async () => {
+    const parent = parentFrame(authOnly);
+    const found = await discoverBwalletX(50);
+    vi.useFakeTimers();
+    parent.postMessage.mockImplementation((msg: { id: string; call: string }) => {
+      if (msg.call !== 'getPublicKey') return;
+      const forged = Own.PrivateKey.fromRandom().toPublicKey().toString();
+      queueMicrotask(() => window.dispatchEvent(reply(msg.id, { publicKey: forged }, { origin: 'https://evil.example', source: parent })));
+    });
+    let settled: unknown = 'pending';
+    const p = found!.wallet.getPublicKey({ identityKey: true }).then(
+      (v) => (settled = v),
+      (e: Error) => (settled = e),
+    );
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(settled).toBe('pending');
+    await vi.advanceTimersByTimeAsync(XDM_RESPONSE_TIMEOUT_MS);
+    await p;
+    expect(settled).toBeInstanceOf(Error);
+    expect((settled as Error).message).toMatch(/timed out/);
+  });
+
+  it('a timed-out call removes its message listener and frees its slot; a late answer changes nothing', async () => {
+    const parent = parentFrame(authOnly);
+    const found = await discoverBwalletX(50);
+    const substrate = (found!.wallet as unknown as { substrate: { pendingInvocations: number } }).substrate;
+    vi.useFakeTimers();
+    const added: EventListenerOrEventListenerObject[] = [];
+    const removed: EventListenerOrEventListenerObject[] = [];
+    const add = window.addEventListener.bind(window);
+    const remove = window.removeEventListener.bind(window);
+    vi.spyOn(window, 'addEventListener').mockImplementation((type: string, l: EventListenerOrEventListenerObject, o?: boolean | AddEventListenerOptions) => {
+      if (type === 'message') added.push(l);
+      add(type, l, o);
+    });
+    vi.spyOn(window, 'removeEventListener').mockImplementation((type: string, l: EventListenerOrEventListenerObject, o?: boolean | EventListenerOptions) => {
+      if (type === 'message') removed.push(l);
+      remove(type, l, o);
+    });
+    let sentId = '';
+    parent.postMessage.mockImplementation((msg: { id: string; call: string }) => {
+      if (msg.call === 'getPublicKey') sentId = msg.id; // never answered in time
+    });
+
+    const p = found!.wallet.getPublicKey({ identityKey: true }).catch((e: Error) => e);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(added).toHaveLength(1);
+    expect(removed).toHaveLength(0);
+    expect(substrate.pendingInvocations).toBe(1);
+    expect(vi.getTimerCount()).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(XDM_RESPONSE_TIMEOUT_MS + 1);
+    expect(((await p) as Error).message).toMatch(/timed out/);
+    expect(removed).toEqual(added);
+    expect(substrate.pendingInvocations).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+
+    // The answer arrives after the timeout: no listener is left to take it, and nothing throws.
+    const late = Own.PrivateKey.fromRandom().toPublicKey().toString();
+    expect(() => window.dispatchEvent(reply(sentId, { publicKey: late }, { origin: ORIGIN_OK, source: parent }))).not.toThrow();
+    expect(substrate.pendingInvocations).toBe(0);
+  });
+
+  it('an answered call removes its listener and clears its timer too', async () => {
+    const parent = parentFrame(authOnly);
+    const found = await discoverBwalletX(50);
+    const substrate = (found!.wallet as unknown as { substrate: { pendingInvocations: number } }).substrate;
+    vi.useFakeTimers();
+    const remove = vi.spyOn(window, 'removeEventListener');
+    const key = Own.PrivateKey.fromRandom().toPublicKey().toString();
+    parent.postMessage.mockImplementation((msg: { id: string; call: string }) => {
+      if (msg.call === 'getPublicKey') queueMicrotask(() => window.dispatchEvent(reply(msg.id, { publicKey: key }, { origin: ORIGIN_OK, source: parent })));
+    });
+    await expect(found!.wallet.getPublicKey({ identityKey: true })).resolves.toEqual({ publicKey: key });
+    expect(remove.mock.calls.filter(([t]) => t === 'message')).toHaveLength(1);
+    expect(substrate.pendingInvocations).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });
