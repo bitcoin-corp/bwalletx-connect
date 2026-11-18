@@ -14,7 +14,7 @@ pnpm add @bwalletx/connect
 
 ### Requirements
 
-- **Node 20 or later** on the server; any current browser.
+- **Node 22 or later** on the server (and for builds): `@bsv/sdk` 4.x requires it. Any current browser.
 - **No `@bsv/sdk` needed from you.** Since 0.8.0, connect depends on its own `@bsv/sdk` (^4.0.1) instead of using your app's copy, so your app can stay on any version (1.9, 2.x or 4.x). The wallet clients connect builds itself (in the bWalletX frame over XDM, desktop wallets with `probeLocal`, and Metanet Desktop via `metanetOption()`) are 4.x `WalletClient`s whatever your version: arguments are validated before they reach the wallet, answers are validated (createAction/signAction answers checked against the request), and every XDM call times out after `XDM_RESPONSE_TIMEOUT_MS` (10 minutes) instead of waiting forever. Wallets the page already has (the extension's announcement, `window.CWI`, a phone pairing) are used as they are.
   - App on **4.x**: the package manager shares one copy (pnpm, checked, resolves connect's ^4.0.1 to the app's 4.x, even a pinned 4.0.1). No extra size.
   - App on **1.9 or 2.x**: you get two copies. In a browser bundle connect's copy adds about 417 KB minified (about 125 KB gzipped) on top of yours. If that matters, load the sign-in code lazily (`import('@bwalletx/connect')` on click).
