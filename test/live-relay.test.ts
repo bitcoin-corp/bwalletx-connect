@@ -30,6 +30,7 @@ describe.skipIf(!live)('live relay.bwallet.space', () => {
         storage,
         socket: siteSocket,
         onCode: (c) => (code = c),
+        confirmCode: () => true,
         // The phone joins after the site's socket is up, as a person scanning would.
         onLink: (link) => setTimeout(() => (phone = fakePhone(link, phoneSocket, root, { burst: true })), 1500),
       },

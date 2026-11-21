@@ -8,7 +8,7 @@
  *   frame:  { s: seq, n: nonce b64, d: ciphertext b64 }, AAD = "<sender role>|<s>", s strictly increasing
  *   code:   first 2 bytes of SHA-256(key bits) → 4 digits, shown on both screens
  */
-import { PrivateKey, PublicKey } from '@bsv/sdk';
+import { Hash, PrivateKey, PublicKey, Utils } from '@bsv/sdk';
 
 export const PAIR_VERSION = '1';
 export const PAIR_INFO = 'bwallet-pair-v1';
@@ -27,13 +27,26 @@ export type PairLink = { v: string; r: string; c: string; k: string; o: string; 
 export type PairMessage =
   | { t: 'req'; id: string; action: string; params: unknown }
   | { t: 'res'; id: string; result?: unknown; error?: { code: string; message: string } }
-  | { t: 'ready' }
+  /**
+   * `wcv: 2` + `nc`: the wallet's session claim digest. The site checks it against its own derivation, stores `wv: 2`
+   * and sends it as `wc` on its next connects (that is also how a pairing that started as v1 upgrades).
+   */
+  | { t: 'ready'; wcv?: 2; nc?: string }
   | { t: 'ping' }
   | { t: 'close'; reason: string };
 
 /** Unencrypted frames: from the relay, and the phone's hello (its key isn't shared yet). */
-export type RelayFrame = { t: 'relay'; verifiedOrigin?: string; peer?: 'joined' | 'left'; role?: Role; error?: string };
-export type HelloFrame = { t: 'hello'; k: string; info: WalletInfo };
+export type RelayFrame = {
+  t: 'relay';
+  verifiedOrigin?: string;
+  peer?: 'joined' | 'left';
+  role?: Role;
+  error?: string;
+  /** 2: the relay bound the wallet role to the wallet's session claim (wallet claim v2). */
+  wcv?: number;
+};
+/** `wcv: 2`: the relay holds the wallet role for this pairing's session claim, so the site re-binds it on reconnects. */
+export type HelloFrame = { t: 'hello'; k: string; info: WalletInfo; wcv?: 2 };
 export type SealedFrame = { s: number; n: string; d: string };
 
 const enc = new TextEncoder();
@@ -97,6 +110,19 @@ export async function walletClaimFor(channel: string, sitePub: string): Promise<
   return b64url(new Uint8Array(d));
 }
 
+const SESSION_CLAIM_INFO = 'bwallet-pair-wallet-claim-v2';
+
+/**
+ * Wallet claim v2: the wallet's relay claim for the life of a pairing. HMAC-SHA256 keyed by the ECDH point of the two
+ * pairing keys (compressed), over "bwallet-pair-wallet-claim-v2|<channel>". The phone computes it from its pairing key
+ * and the QR's site key; the site from its pairing key and the phone's hello. Unlike walletClaimFor, nothing in the QR
+ * is enough to compute it. Same bytes as bWalletX's src/pair/protocol.ts and the bwalletx CLI.
+ */
+export function sessionWalletClaim(mine: PrivateKey, theirs: string, channel: string): string {
+  const point = mine.deriveSharedSecret(PublicKey.fromString(theirs)).encode(true) as number[];
+  return b64url(new Uint8Array(Hash.sha256hmac(point, Utils.toArray(`${SESSION_CLAIM_INFO}|${channel}`, 'utf8'))));
+}
+
 /** SHA-256 (hex) of a claim: what the relay stores and what a site sends as `wc`. */
 export async function claimDigest(claim: string): Promise<string> {
   return hex(new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(claim))));
@@ -104,14 +130,16 @@ export async function claimDigest(claim: string): Promise<string> {
 
 /**
  * The relay socket URL. `claim` binds the role to this client (N3-1: a site always sends one, on every reconnect).
- * A site opening a new channel also passes `walletClaimHash` so only the phone that scanned the QR gets the wallet role.
+ * A site opening a new channel also passes `walletClaimHash` so only the phone that scanned the QR gets the wallet role,
+ * and a site with a v2 pairing passes its session claim digest on every reconnect. On a wallet socket the same
+ * argument is sent as `nc`: the session claim digest the relay binds the wallet role to.
  */
 export const relaySocketUrl = (relay: string, channel: string, role: Role, expiry?: number, claim?: string, walletClaimHash?: string) => {
   const local = /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(relay);
   const q = new URLSearchParams({ role });
   if (expiry) q.set('e', String(expiry));
   if (claim) q.set('claim', claim);
-  if (walletClaimHash && role === 'site') q.set('wc', walletClaimHash);
+  if (walletClaimHash) q.set(role === 'site' ? 'wc' : 'nc', walletClaimHash);
   return `${local ? 'ws' : 'wss'}://${relay}/v1/c/${channel}?${q}`;
 };
 

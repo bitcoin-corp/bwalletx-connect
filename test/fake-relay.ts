@@ -4,7 +4,8 @@ import type { SocketLike } from '../src/pair';
 export class FakeRelay {
   channels = new Map<string, { site?: FakeSocket; wallet?: FakeSocket }>();
   urls: string[] = [];
-  constructor(public origin = 'https://example.com') {}
+  /** v2: answer a wallet that sends `nc` with wcv: 2, as a relay with wallet claim v2 does. */
+  constructor(public origin = 'https://example.com', public v2 = false) {}
 
   socket = (url: string): SocketLike => {
     this.urls.push(url);
@@ -19,7 +20,8 @@ export class FakeRelay {
     queueMicrotask(() => {
       s.readyState = 1;
       s.onopen?.({});
-      if (role === 'wallet') s.deliver(JSON.stringify({ t: 'relay', verifiedOrigin: this.origin }));
+      if (role === 'wallet')
+        s.deliver(JSON.stringify({ t: 'relay', verifiedOrigin: this.origin, ...(this.v2 && u.searchParams.get('nc') && { wcv: 2 }) }));
     });
     return s;
   };
