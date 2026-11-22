@@ -19,7 +19,7 @@ needed a second trip to the wallet that the user never made.
   only a claim (anyone with the link can forge one): its `ready` is used once the relay's wallet says hello with the
   same key. It returns the starting `page`; the provider and `<bwalletx-signin>` post the sign-in to `verifyUrl` and
   go back to it. The tab that started it stops (`RETURNED_IN_ANOTHER_TAB`) and re-reads `sessionUrl`.
-- **Only reads and the sign-in are re-sent** after a reconnect (`safeToResend`). A spend or other acting call is sent
+- **Only reads are re-sent** after a reconnect (not even the sign-in signature; review 4) (`safeToResend`). A spend or other acting call is sent
   once: it waits for its own answer and times out as `NO_ANSWER_MAYBE_SENT` ("check bWalletX before you try again").
 - Only a call that actually reached a socket counts as sent: an unsent spend goes out once when the link is back; a
   sent one is never re-sent. A pairing whose return another tab took stops (`RETURNED_IN_ANOTHER_TAB`) instead of

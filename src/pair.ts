@@ -329,9 +329,9 @@ function foldedFrom(login: ReadyLogin | undefined, nonce: string | undefined): F
 }
 
 /**
- * Calls that may be asked again with the same id after a reconnect: reads, and the sign-in signature (bWalletX shows
- * its own sheet for it, and a repeat signs the same text). Everything else acts (spends, signs other data, writes)
- * and is sent once only.
+ * Calls that may be asked again with the same id after a reconnect: reads only (review 4, 22 Nov 2026: not even the
+ * sign-in signature, which shows a sheet). Everything else is sent once; an unsent call goes out once when the link is
+ * back.
  */
 const READ_ONLY = new Set([
   'getPublicKey',
@@ -349,11 +349,8 @@ const READ_ONLY = new Set([
   'discoverByIdentityKey',
   'discoverByAttributes',
 ]);
-export function safeToResend(action: string, params: unknown): boolean {
-  if (READ_ONLY.has(action)) return true;
-  if (action !== 'createSignature') return false;
-  const p = (params ?? {}) as { protocolID?: unknown };
-  return Array.isArray(p.protocolID) && p.protocolID[0] === 2 && p.protocolID[1] === 'bwallet sign in';
+export function safeToResend(action: string, _params?: unknown): boolean {
+  return READ_ONLY.has(action);
 }
 
 type Waiting = {
@@ -509,7 +506,7 @@ class Link {
     if (Date.now() - this.lastResend < RESEND_DEDUPE_MS) return;
     this.lastResend = Date.now();
     for (const [id, w] of this.waiting) {
-      // Review 22 Nov 2026: only reads and the sign-in are asked again. A spend (or anything else that acts) is never
+      // Review 22 Nov 2026: only reads are asked again (review 4: not the sign-in either). A spend (or anything that acts) is never
       // re-sent: bWalletX's record of answered ids is in memory, so after iOS kills it a re-sent createAction would
       // show a second payment sheet. It keeps waiting for its own answer, and times out as "maybe sent".
       if (w.sent && !safeToResend(w.action, w.params)) continue;

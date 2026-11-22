@@ -306,7 +306,7 @@ What each piece stops:
 | Piece | Stops |
 | ----- | ----- |
 | Reconnect on `visibilitychange`/`pageshow`, re-send on `ready` | The sign-in hanging because iOS froze the tab and killed its socket. |
-| Only reads and the sign-in are re-sent; an unsent call goes once | A second payment sheet after a reconnect (bWalletX's answered-id record is in memory). |
+| Only reads are re-sent (not even the sign-in signature); an unsent call goes once | A second payment sheet after a reconnect (bWalletX's answered-id record is in memory). |
 | The wallet returns only to the ROOT of the exact origin the relay saw; the page is kept in this browser | A link sending the user to a path or subdomain someone else chose; OAuth codes or tokens leaking into the link. |
 | The sign-in signature travels ONLY in the return fragment, never over the relay | A script that claims your origin to the relay (it can set any `Origin` header) taking the signature: the wallet opens the fragment in the user's own browser, at that origin. |
 | The fragment counts only after the relay's wallet says hello with the same key; it is taken once, then deleted | Someone holding the link forging a fragment that pairs your page with their wallet or signs the user into their account. |
