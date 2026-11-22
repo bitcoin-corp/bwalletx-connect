@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.0 (unreleased)
+## 0.9.0 (22 Nov 2026)
 
 Sign in with bWalletX on a phone, on the same phone (P0, 22 Nov 2026: "it has never worked"). Three gaps, all on one
 device: the site's tab is frozen while the user is in bWalletX, the wallet never sent the user back, and the sign-in
