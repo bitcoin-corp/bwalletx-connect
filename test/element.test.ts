@@ -147,3 +147,23 @@ describe('buildAuthorizeUrl', () => {
     expect(saved.state).toBe(u.searchParams.get('state'));
   });
 });
+
+describe('<bwalletx-signin> state property (0.9.1: React 19 sets known props as properties)', () => {
+  it('assigning el.state sets the attribute instead of throwing, and null clears it', () => {
+    const el = mount() as El & { state: string | null };
+    expect(() => { el.state = 'pending'; }).not.toThrow();
+    expect(el.getAttribute('state')).toBe('pending');
+    expect(el.state).toBe('pending');
+    el.state = null;
+    expect(el.hasAttribute('state')).toBe(false);
+  });
+
+  it('every prop the React wrapper passes can be assigned the way React 19 does (property when `in` the element)', () => {
+    const el = mount() as unknown as Record<string, unknown>;
+    const props: Record<string, unknown> = { state: 'pending', size: 'md', theme: 'dark', label: 'x', brand: 'b', subtitle: 'off', 'identity-key': '02' + '0'.repeat(64), paymail: 'a@b.c', handle: 'a', 'avatar-url': 'https://x/y.png', error: 'e' };
+    for (const [k, v] of Object.entries(props)) {
+      expect(() => { if (k in el) el[k] = v; else (el as unknown as HTMLElement).setAttribute(k, String(v)); }, k).not.toThrow();
+    }
+    expect((el as unknown as HTMLElement).getAttribute('state')).toBe('pending');
+  });
+});
