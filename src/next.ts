@@ -11,7 +11,7 @@
  *   // server component: const s = await auth.getSession();
  */
 import { IdentityLinkConflictError } from './link.js';
-import { createChallenge, originAllowed, pairKeysDocument, signPairProofs, verifySignIn, type NonceStore, type PairProofRequest } from './server.js';
+import { createChallenge, originAllowed, verifySignIn, type NonceStore } from './server.js';
 import { assertSecret, readCookie, serializeCookie, signSession, verifySession, type SessionPayload } from './session.js';
 
 export type { SessionPayload } from './session.js';
@@ -46,18 +46,9 @@ export interface BwalletXAuthOptions {
    * handle. Throw IdentityLinkConflictError to answer 409; return false to refuse (403).
    */
   onVerified?: (identityKey: string, req: Request) => Promise<VerifiedExtra | void | false> | VerifiedExtra | void | false;
-  /**
-   * (0.9.0) Your site's pairing key (WIF or 64 hex), so phone pairing links carry an origin proof (pairProof +
-   * pairKeys). Default: process.env.BWALLETX_PAIR_SIGNING_KEY. Unset: no proof, links stay unproven as before.
-   */
-  pairKey?: string;
 }
 
 export interface BwalletXAuth {
-  /** (0.9.0) POST: sign this origin's phone pairing link (pairingModal({ proofUrl }) / proof-url). 404 with no pairKey. */
-  pairProof(req: Request): Promise<Response>;
-  /** (0.9.0) GET /.well-known/bwalletx-pair.json: { keys: [the pairing key's public key] }. */
-  pairKeys(): Response;
   challenge(req: Request): Promise<Response>;
   verify(req: Request): Promise<Response>;
   logout(req: Request): Promise<Response>;
@@ -104,19 +95,7 @@ export function createBwalletXAuth(o: BwalletXAuthOptions): BwalletXAuth {
     return jar.get(cookieName)?.value ?? null;
   };
 
-  const pairKey = () => o.pairKey ?? (typeof process !== 'undefined' ? process.env?.BWALLETX_PAIR_SIGNING_KEY : undefined) ?? '';
   const auth: BwalletXAuth = {
-    async pairProof(req) {
-      if (badOrigin(req)) return json({ error: 'origin not allowed' }, 403);
-      const k = pairKey();
-      if (!k) return json({ error: 'no pairing key' }, 404);
-      const signed = signPairProofs((await body(req)) as unknown as PairProofRequest, { origin: o.origin, key: k });
-      return signed ? json(signed) : json({ error: 'bad request' }, 400);
-    },
-    pairKeys() {
-      const k = pairKey();
-      return json(pairKeysDocument(k ? [k] : []), 200, { 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=300' });
-    },
     async challenge(req) {
       secret();
       if (badOrigin(req)) return json({ error: 'origin not allowed' }, 403);

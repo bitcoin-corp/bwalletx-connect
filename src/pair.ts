@@ -93,12 +93,6 @@ export interface PairingOptions extends PairConnectionOptions {
   /** (0.9.0) Where a return tab finds this pairing. Default: localStorage (shared by the tabs of this origin). */
   returnStorage?: PairStorage | null;
   /**
-   * (0.9.0) Get this site's origin proofs for the link (s, and s2 when it has a return): usually a POST to your own
-   * route that calls signPairProofs (createBwalletXAuth's pairProof). With a valid s2, bWalletX 5.2.61+ shows the host
-   * as proven and signs in on the Connect card (one tap); without one it asks for the sign-in on a separate sheet.
-   */
-  proof?: (fields: { c: string; k: string; o: string; e: number; ret?: string; rid?: string; b?: string }) => Promise<{ s?: string; s2?: string } | null>;
-  /**
    * (0.9.0) After the wallet says "signed in, see the return" (`ls`), how long to wait for that return before pairing
    * without it (the sign-in then goes as a request, on the wallet's separate sheet). Default 20000 ms.
    */
@@ -205,9 +199,32 @@ export function onPageWake(fn: () => void): () => void {
 }
 
 const visible = () => typeof document === 'undefined' || document.visibilityState !== 'hidden';
-const defaultHash = () => (typeof location !== 'undefined' ? location.hash : '');
+
+/**
+ * Review 3 (22 Nov 2026): the wallet's return fragment (#bwx=ok&rid=…&wk=…&f=…) leaves the address bar as soon as this
+ * module loads, synchronously, and again on every hashchange (this listener is added before any script that loads
+ * after connect), so history sync, analytics or session replay never read it. It is kept here, in memory, for
+ * resumeReturnedPairing and a waiting pairBwalletX. Load connect before third-party scripts.
+ */
+let stashedReturn = '';
+const isReturnHash = (h: string) => /(^#|&)bwx=ok(&|$)/.test(h);
+function stripReturnHash() {
+  if (typeof location === 'undefined' || !isReturnHash(location.hash)) return;
+  stashedReturn = location.hash;
+  try {
+    history.replaceState(history.state, '', `${location.pathname}${location.search}`);
+  } catch {
+    /* no history API: the hash stays */
+  }
+}
+stripReturnHash();
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') window.addEventListener('hashchange', stripReturnHash);
+/** (0.9.0) bWalletX's return is waiting to be finished (resumeReturnedPairing). */
+export const hasReturnFragment = () => !!stashedReturn;
+const defaultHash = () => stashedReturn;
 const defaultHref = () => (typeof location !== 'undefined' ? location.href : '');
 const defaultReplace = (url: string) => {
+  stashedReturn = ''; // taken
   try {
     if (typeof history !== 'undefined') history.replaceState(history.state, '', url);
   } catch {
@@ -650,15 +667,7 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
       (typeof navigator !== 'undefined' ? browserHintOf(navigator) : undefined)
     : undefined;
 
-  // (0.9.0) The site's origin proofs (s, s2) from its own server (signPairProofs), if it has a pairing key.
-  const proofs = (): Promise<{ s?: string; s2?: string } | null> =>
-    opts.proof
-      ? Promise.resolve(
-          opts.proof({ c: channel, k: sitePub, o: origin, e: expiry, ...(sameDevice && rid && { ret, rid, ...(b && { b }) }) }),
-        ).catch(() => null)
-      : Promise.resolve(null);
-
-  return Promise.all([walletClaimFor(channel, sitePub).then(claimDigest), proofs()]).then(([wc, proof]) => new Promise<PairedWallet>((resolve, reject) => {
+  return walletClaimFor(channel, sitePub).then(claimDigest).then((wc) => new Promise<PairedWallet>((resolve, reject) => {
     if (opts.signal?.aborted) return reject(new Error('cancelled'));
     let ws: SocketLike | null = null;
     let everOpen = false;
@@ -848,8 +857,6 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
       e: expiry,
       ...(sameDevice && rid && { ret, rid, ...(b && { b }) }),
       ...(ln && lx && { ln, lx }),
-      ...(proof?.s && /^30[0-9a-f]{10,150}$/i.test(proof.s) && { s: proof.s }),
-      ...(proof?.s2 && /^30[0-9a-f]{10,150}$/i.test(proof.s2) && { s2: proof.s2 }),
     });
     if (rid)
       void writePending(returns, { v: 1, c: channel, r: relay, s: siteKey.toHex(), sc: siteClaim, e: expiry, rid, ret, page, at: Date.now(), ...(ln && { ln }) })

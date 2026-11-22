@@ -21,17 +21,14 @@ needed a second trip to the wallet that the user never made.
   go back to it. The tab that started it stops (`RETURNED_IN_ANOTHER_TAB`) and re-reads `sessionUrl`.
 - **Only reads and the sign-in are re-sent** after a reconnect (`safeToResend`). A spend or other acting call is sent
   once: it waits for its own answer and times out as `NO_ANSWER_MAYBE_SENT` ("check bWalletX before you try again").
-- **Origin proofs for your own site** (review 22 Nov 2026). bWalletX 5.2.61+ signs in on the Connect card only for a
-  PROVEN origin (a valid `s2`); otherwise it asks on a separate sheet that names the claimed host with a warning (the
-  relay's origin is a header any non-browser client can set). To prove yours: set `BWALLETX_PAIR_SIGNING_KEY` (WIF),
-  serve `auth.pairKeys()` at `/.well-known/bwalletx-pair.json`, serve `auth.pairProof(req)` at a POST route, and pass
-  its URL as `pairProofUrl` (provider), `pair-proof-url` (element) or `pairingModal({ proofUrl })`. `signPairProofs`
-  signs only this origin, a live expiry and its root as `ret`. A script outside a browser can still call that route,
-  so a proof shows the link came from your server, not that the user is on your page.
 - Only a call that actually reached a socket counts as sent: an unsent spend goes out once when the link is back; a
   sent one is never re-sent. A pairing whose return another tab took stops (`RETURNED_IN_ANOTHER_TAB`) instead of
   finishing a second sign-in. Return entries (they hold the pairing key) are deleted once taken, and stale ones (over
   10 minutes) are removed whenever a pairing starts or resumes.
+- **No origin proofs** (review 3, 22 Nov 2026): a proof route can't tell a browser from a script, so it is gone (no
+  keys, no routes). bWalletX returns to the root of the relay-seen origin; every sheet over the relay keeps "a site that
+  claims to be". **The return fragment is stripped at module load** and on `hashchange` (`hasReturnFragment()`): load
+  connect before third-party scripts.
 - **The sign-in signature travels only in the return fragment** (CTO 22 Nov 2026). Over the relay bWalletX sends
   `ready` with `ls: 1` ("signed in, see the return") and no signature; a site ignores any `login` that arrives over the
   relay. After `ls` the page waits for the return (`returnWaitMs`, default 20 s), then pairs without it and asks for the

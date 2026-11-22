@@ -293,31 +293,26 @@ SVG files, and an HTML/CSS version with no JavaScript, are in `assets/`. All var
 
 ## Sign in on the same phone (0.9.0)
 
-On a phone, "Sign in with bWalletX" opens the bWalletX app, which sends the user back to your site. Needs bWalletX
-5.2.61+. The provider (`pairProofUrl`) and `<bwalletx-signin>` (`pair-proof-url`) do all of it; `pairBwalletX` and
-`resumeReturnedPairing` are the parts.
+On a phone, "Sign in with bWalletX" opens the bWalletX app, which signs in on its Connect card and sends the user back
+to your site. Needs bWalletX 5.2.61+. The provider and `<bwalletx-signin>` do all of it with no extra setup: no keys,
+no new routes. `pairBwalletX` and `resumeReturnedPairing` are the parts.
 
-To get the one-tap flow, prove your origin. Without the proof the wallet still pairs and returns, but asks for the
-sign-in on a separate sheet that names your host as "a site that claims to be".
-
-1. Generate a secp256k1 key (a pairing key, never a wallet key) and set `BWALLETX_PAIR_SIGNING_KEY` (WIF) in your env.
-2. Serve `auth.pairKeys()` at `GET /.well-known/bwalletx-pair.json` on the exact origin people use, with no redirect.
-3. Serve `auth.pairProof(req)` at `POST /api/bwalletx/pair-proof`, and pass `pairProofUrl="/api/bwalletx/pair-proof"`.
+**Load connect before any third-party script** (analytics, session replay, history sync). The wallet's return lands as
+`#bwx=ok&…`; connect removes it from the address bar the moment its module loads, and on every `hashchange`, so a
+script that loads later never reads it.
 
 What each piece stops:
 
 | Piece | Stops |
 | ----- | ----- |
 | Reconnect on `visibilitychange`/`pageshow`, re-send on `ready` | The sign-in hanging because iOS froze the tab and killed its socket. |
-| Only reads and the sign-in are re-sent; unsent calls go once | A second payment sheet after a reconnect (bWalletX's answered-id record is in memory). |
-| `ret` is the exact origin's root; the page is kept in this browser | A link sending the user to a path or subdomain someone else chose; OAuth codes or tokens leaking into the link. |
-| The return fragment counts only after the relay's wallet says hello with the same key; it is taken once, then deleted | Someone holding the link forging a fragment that pairs your page with their wallet or signs the user into their account. |
-| The sign-in signature travels ONLY in the return fragment, never over the relay | A script that claims your origin to the relay (it can set any `Origin` header, and can even get a valid `s2` from your proof route) taking the signature: the wallet opens the fragment in the user's own browser at your exact origin. |
-| One-tap only with a valid `s2`; otherwise the separate "claims to be" sheet | Users approving a sign-in for a host the wallet can't confirm on the same card as Connect. |
-| A card expires with its code, signs with the account it opened under | A stale card, or a sign-in under an account switched to meanwhile. |
-
-What the proof does NOT stop: your proof route can't tell a browser from a script, so a script can get `s2` for its own
-link. It then sees the pairing, but never the sign-in signature.
+| Only reads and the sign-in are re-sent; an unsent call goes once | A second payment sheet after a reconnect (bWalletX's answered-id record is in memory). |
+| The wallet returns only to the ROOT of the exact origin the relay saw; the page is kept in this browser | A link sending the user to a path or subdomain someone else chose; OAuth codes or tokens leaking into the link. |
+| The sign-in signature travels ONLY in the return fragment, never over the relay | A script that claims your origin to the relay (it can set any `Origin` header) taking the signature: the wallet opens the fragment in the user's own browser, at that origin. |
+| The fragment counts only after the relay's wallet says hello with the same key; it is taken once, then deleted | Someone holding the link forging a fragment that pairs your page with their wallet or signs the user into their account. |
+| The fragment is stripped at module load and on `hashchange` | Analytics, session replay or history sync reading a fragment before it is used. |
+| Every sheet sent over the relay says "a site that claims to be <host>" | Users trusting a host name the relay can't vouch for. (No origin proofs: a proof route can't tell a browser from a script.) |
+| A card expires with its code and signs with the account it opened under | A stale card, or a sign-in under an account switched to meanwhile. |
 
 ## Server
 

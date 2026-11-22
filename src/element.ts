@@ -43,7 +43,6 @@
  *                 signed-in | error, with identity-key, paymail, handle, avatar-url and error. The element then
  *                 only emits events; it never changes its own state.
  *   href          plain link mode: navigate here on click
- *   pair-proof-url (0.9.0) POST route that signs this origin's phone pairing links (createBwalletXAuth().pairProof)
  *   authorize-url (+ client-id, redirect-uri, scope)  OAuth mode, for auth.bwalletx.com once it exists
  *
  * Wallet choice (0.5.6): bWalletX in this browser (its own announcement, never window.CWI) → straight to its sheet,
@@ -79,7 +78,7 @@ import { requestAccess, type AccessChallengeLike } from './access-client.js';
 import { AccessError } from './access.js';
 import { accountLabel, avatarUrlFor, copyText, lookupPaymail, rememberIdentity, rememberedIdentity, signInErrorText } from './account.js';
 import { openForSignIn, runSilentMetanet } from './connect-flow.js';
-import { onPageWake, resumeReturnedPairing } from './pair.js';
+import { hasReturnFragment, onPageWake, resumeReturnedPairing } from './pair.js';
 import {
   metanetOffered, metanetOption, rememberKnownIdentityKey, silentAttemptUsed, METANET_LABEL, METANET_NOTE, METANET_REMEMBERED_NOTE,
   METANET_OPTION_ID, METANET_TYPE, NOT_YOU_LABEL, warnIfNoLogout,
@@ -316,7 +315,7 @@ function createClass(): CustomElementConstructor {
       this.#unwake?.();
       this.#unwake = onPageWake(() => void this.#recheck());
       // 0.9.0: bWalletX sent the user back here after Connect on the same phone: finish that sign-in first.
-      if (typeof location !== 'undefined' && /(^#|&)bwx=ok(&|$)/.test(location.hash))
+      if (hasReturnFragment())
         void this.#resumeReturn().then((done) => (done ? undefined : this.#restore().then(() => this.#silentMetanet())));
       else void this.#restore().then(() => this.#silentMetanet());
     }
@@ -329,7 +328,7 @@ function createClass(): CustomElementConstructor {
      * Finish the pairing saved for that rid and post the folded sign-in to verify-url. True when signed in.
      */
     async #resumeReturn(): Promise<boolean> {
-      if (typeof location === 'undefined' || !/(^#|&)bwx=ok(&|$)/.test(location.hash)) return false;
+      if (!hasReturnFragment()) return false;
       const r = await resumeReturnedPairing().catch(() => null);
       if (!r?.login) return false;
       const { identityKey, nonce, signature } = r.login;
@@ -848,7 +847,7 @@ function createClass(): CustomElementConstructor {
       const own = this.#stateful && !this.#controlled;
       const prev = this.#phase === 'signed-in' ? 'signed-in' : 'signed-out';
       const started = Date.now();
-      const pairing = pairingModal({ proofUrl: this.#attr('pair-proof-url') ?? undefined });
+      const pairing = pairingModal();
       let option: WalletOption | null = null;
       const run = ++this.#run;
       const live = () => run === this.#run;

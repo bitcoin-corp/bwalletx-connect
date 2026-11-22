@@ -20,7 +20,7 @@ import {
   type ReactNode,
 } from 'react';
 import type { WalletInterface } from '@bsv/sdk';
-import { clearPairing, onPageWake, resumeReturnedPairing } from './pair.js';
+import { clearPairing, hasReturnFragment, onPageWake, resumeReturnedPairing } from './pair.js';
 import { declareWalletTheme } from './theme.js';
 import { runConnect, runSilentMetanet } from './connect-flow.js';
 import { metanetOffered, silentAttemptUsed, warnIfNoLogout, METANET_TYPE } from './metanet.js';
@@ -275,11 +275,6 @@ export interface BwalletXProviderProps {
   /** Offer phone pairing with the built-in QR modal. Default true. */
   pairing?: boolean;
   /**
-   * (0.9.0) Your route that signs this origin's phone pairing links (createBwalletXAuth().pairProof), e.g.
-   * '/api/bwalletx/pair-proof'. With it, bWalletX shows your host as proven and signs in with one tap on a phone.
-   */
-  pairProofUrl?: string;
-  /**
    * Show the built-in picker when there is a real choice. Default true. One wallet found in this browser (and no
    * app-supplied option such as HandCash) is used straight away, with no picker; phone pairing is then not offered.
    */
@@ -406,7 +401,7 @@ export function BwalletXProvider(p: BwalletXProviderProps): ReactElement {
   // 0.9.0: bWalletX sent the user back here after Connect on the same phone (#bwx=ok&rid=…, often a NEW tab): finish
   // the pairing saved for that rid and post the sign-in folded into Connect to verifyUrl.
   useEffect(() => {
-    if (typeof location === 'undefined' || !/(^#|&)bwx=ok(&|$)/.test(location.hash)) return;
+    if (!hasReturnFragment()) return;
     let live = true;
     void resumeReturnedPairing()
       .then(async (r) => {
@@ -474,7 +469,7 @@ export function BwalletXProvider(p: BwalletXProviderProps): ReactElement {
       ms: c.discoverMs,
       probeLocal: c.probeLocal,
       extra: c.extraWallets,
-      pairing: c.pairing === false ? undefined : () => pairingModal({ proofUrl: c.pairProofUrl }),
+      pairing: c.pairing === false ? undefined : () => pairingModal(),
     });
     setWallets(list);
     return list;
