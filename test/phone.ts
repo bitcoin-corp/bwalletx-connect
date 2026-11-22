@@ -29,7 +29,7 @@ export function fakePhone(link: string, socket: SocketFactory, root: PrivateKey,
   const l = parsePairUrl(link);
   const P = PrivateKey.fromRandom();
   const pw = new ProtoWallet(root) as unknown as Record<string, (a: unknown) => Promise<unknown>>;
-  const answers = new Map<string, SealedFrame>();
+  const answers = new Map<string, PairMessage>();
   const state: {
     code?: string;
     ws?: SocketLike;
@@ -72,8 +72,12 @@ export function fakePhone(link: string, socket: SocketFactory, root: PrivateKey,
           const s = await deriveSession(P, l.k, l.c);
           state.code = s.code;
           state.sealer = new Sealer(s.key, 'wallet');
+          // Seal ready BEFORE saying hello, then send both in the same tick.
+          const frame = await state.sealer.seal(await readyMsg());
+          state.readyFrame = frame;
           ws.send(state.hello);
-          await state.connect();
+          ws.send(JSON.stringify(frame));
+          if (l.ret && l.rid) state.returnTo = `${l.ret}#${returnFragment(l.rid, P.toPublicKey().toString(), frame)}`;
         } else {
           ws.send(state.hello);
           const s = await deriveSession(P, l.k, l.c);
@@ -92,13 +96,14 @@ export function fakePhone(link: string, socket: SocketFactory, root: PrivateKey,
       if (!state.sealer || !isSealed(f)) return;
       const m = (await state.sealer.open(f)) as PairMessage | null;
       if (m?.t !== 'req') return;
+      // A repeated id gets the stored answer, sealed afresh (bWalletX ReplyBook: never run twice).
       const seen = answers.get(m.id);
-      if (seen) return ws.send(JSON.stringify(seen));
+      if (seen) return ws.send(JSON.stringify(await state.sealer.seal(seen)));
       state.requests.push(m.action);
       const result = await pw[m.action].call(pw, m.params);
-      const out = await state.sealer.seal({ t: 'res', id: m.id, result });
-      answers.set(m.id, out);
-      ws.send(JSON.stringify(out));
+      const res: PairMessage = { t: 'res', id: m.id, result };
+      answers.set(m.id, res);
+      ws.send(JSON.stringify(await state.sealer.seal(res)));
     };
   };
   state.ws = socket(relaySocketUrl(l.r, l.c, 'wallet'));

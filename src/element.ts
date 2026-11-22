@@ -77,7 +77,8 @@ import { signInAndVerify, type Challenge } from './signin.js';
 import { requestAccess, type AccessChallengeLike } from './access-client.js';
 import { AccessError } from './access.js';
 import { accountLabel, avatarUrlFor, copyText, lookupPaymail, rememberIdentity, rememberedIdentity, signInErrorText } from './account.js';
-import { runSilentMetanet } from './connect-flow.js';
+import { openForSignIn, runSilentMetanet } from './connect-flow.js';
+import { onPageWake, resumeReturnedPairing } from './pair.js';
 import {
   metanetOffered, metanetOption, rememberKnownIdentityKey, silentAttemptUsed, METANET_LABEL, METANET_NOTE, METANET_REMEMBERED_NOTE,
   METANET_OPTION_ID, METANET_TYPE, NOT_YOU_LABEL, warnIfNoLogout,
@@ -311,9 +312,55 @@ function createClass(): CustomElementConstructor {
     connectedCallback() {
       if (!this.#controlled && this.#stateful) warnIfNoLogout({ verifyUrl: this.#attr('verify-url'), logoutUrl: this.#attr('logout-url'), where: '<bwalletx-signin>' });
       this.#render();
-      void this.#restore().then(() => this.#silentMetanet());
+      this.#unwake?.();
+      this.#unwake = onPageWake(() => void this.#recheck());
+      // 0.9.0: bWalletX sent the user back here after Connect on the same phone: finish that sign-in first.
+      if (typeof location !== 'undefined' && /(^#|&)bwx=ok(&|$)/.test(location.hash))
+        void this.#resumeReturn().then((done) => (done ? undefined : this.#restore().then(() => this.#silentMetanet())));
+      else void this.#restore().then(() => this.#silentMetanet());
     }
-    disconnectedCallback() { this.#menu?.close(false); this.#hideTip(); }
+    disconnectedCallback() { this.#menu?.close(false); this.#hideTip(); this.#unwake?.(); this.#unwake = null; }
+
+    #unwake: (() => void) | null = null;
+
+    /**
+     * (0.9.0) The page has `#bwx=ok&rid=…`: bWalletX returned here after Connect (on a phone, often in a new tab).
+     * Finish the pairing saved for that rid and post the folded sign-in to verify-url. True when signed in.
+     */
+    async #resumeReturn(): Promise<boolean> {
+      if (typeof location === 'undefined' || !/(^#|&)bwx=ok(&|$)/.test(location.hash)) return false;
+      const r = await resumeReturnedPairing().catch(() => null);
+      if (!r?.login) return false;
+      const { identityKey, nonce, signature } = r.login;
+      const verifyUrl = this.#attr('verify-url');
+      let response: { handle?: string; paymail?: string } | null = null;
+      try {
+        if (verifyUrl) response = await postJson<{ handle?: string; paymail?: string }>(verifyUrl, { identityKey, nonce, signature });
+      } catch (error) {
+        this.#emit('bwalletx-error', { error });
+        return false;
+      }
+      if (verifyUrl) rememberIdentity(identityKey);
+      if (this.#stateful && !this.#controlled) this.#signedIn({ identityKey, handle: response?.handle ?? null, paymail: response?.paymail ?? null });
+      this.#emit('bwalletx-signed-in', { identityKey, method: 'pairing', nonce, signature, response });
+      return true;
+    }
+
+    /**
+     * (0.9.0) The page is back (another tab, or the wallet, may have signed in meanwhile): re-read session-url once,
+     * quietly, when signed out and nothing is in flight. No wallet call, no "restoring" flicker.
+     */
+    async #recheck() {
+      const url = this.#attr('session-url');
+      if (!url || this.#controlled || !this.#stateful || this.#busy || this.#phase === 'signed-in' || this.#phase === 'restoring') return;
+      try {
+        const r = await fetch(url, { credentials: 'include', headers: { accept: 'application/json' } });
+        const j = (await r.json().catch(() => ({}))) as { identityKey?: string | null; handle?: string | null; paymail?: string | null };
+        if (j.identityKey && !this.#busy && (this.#phase as SigninState) !== 'signed-in') this.#signedIn({ identityKey: j.identityKey, handle: j.handle ?? null, paymail: j.paymail ?? null });
+      } catch {
+        /* offline: try again next time */
+      }
+    }
     attributeChangedCallback() { if (this.isConnected) this.#render(); }
 
     /** The inner <button>, for focus() and tests. */
@@ -831,7 +878,10 @@ function createClass(): CustomElementConstructor {
           if (own) this.#render();
         }
         // Pairing shows the QR here; "Desktop wallet" looks on localhost here (after the tap). No key asked yet.
-        const cw = await option.connect({ identity: false });
+        // 0.9.0: phone pairing gets the challenge first and folds it into Connect (one trip to bWalletX on a phone).
+        const { cw, challenge: folded } = await openForSignIn(option, !this.#attr('require-token'), () =>
+          postJson<Challenge>(challengeUrl, {}),
+        );
         if (!live()) return; // "Not you?" while Metanet was opening
         const wallet = cw.wallet;
         if (!wallet) throw Object.assign(new Error('This wallet cannot sign in here'), { code: 'NOT_SUPPORTED' });
@@ -871,8 +921,8 @@ function createClass(): CustomElementConstructor {
           // Metanet hands over its key on connect (one request at a time), so its sign-in is the signature alone.
           identityKey: cw.identityKey ?? undefined,
           skipWaitForAuthentication: option.id === METANET_OPTION_ID, // its connect() just checked the lock
-          identityKeyHint: verifyUrl ? rememberedIdentity() : undefined,
-          challenge: (identityKey) => postJson<Challenge>(challengeUrl, identityKey ? { identityKey } : {}),
+          identityKeyHint: verifyUrl && !cw.identityKey ? rememberedIdentity() : undefined,
+          challenge: (identityKey) => folded(identityKey) ?? postJson<Challenge>(challengeUrl, identityKey ? { identityKey } : {}),
           verify: async (res) => (verifyUrl ? await postJson<Record<string, unknown>>(verifyUrl, { identityKey: res.identityKey, nonce: res.nonce, signature: res.signature }) : {}),
         });
         if (!live()) {
@@ -889,6 +939,12 @@ function createClass(): CustomElementConstructor {
         this.#attempt(option, 'signed-in', started);
         this.#emit('bwalletx-signed-in', { identityKey: r.identityKey, method, nonce: r.nonce, signature: r.signature, response });
       } catch (error) {
+        // 0.9.0: bWalletX returned to a NEW tab, which finished the sign-in: this tab just picks up the session.
+        if ((error as { code?: string })?.code === 'RETURNED_IN_ANOTHER_TAB') {
+          if (own) this.#phase = prev;
+          queueMicrotask(() => void this.#recheck());
+          return;
+        }
         const outcome = outcomeOf(error);
         this.#attempt(option, outcome, started);
         if (!live()) return; // dropped by "Not you?": no error to show

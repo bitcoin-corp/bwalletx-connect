@@ -1,9 +1,9 @@
 export { findBwalletX, discoverBwalletX, prewarmBwalletX, bindPrewarm, isFramed, DEFAULT_DISCOVER_MS, XDM_RESPONSE_TIMEOUT_MS, BWALLETX_RDNS, RDNS_EXTENSION, RDNS_MOBILE } from './discover.js';
 export type { FoundWallet, FoundBy } from './discover.js';
 export type { Brc100Wallet } from './wallet-like.js';
-export { pairBwalletX, restorePairing, clearPairing } from './pair.js';
-export type { PairingOptions, PairConnectionOptions, PairStorage, PairedWallet, SocketLike, SocketFactory } from './pair.js';
-export { signInWithBwalletX, signInAndVerify, connectBwalletX, waitIfLocked, challengeWantsIdentityKey, LOGIN_PROTOCOL } from './signin.js';
+export { pairBwalletX, restorePairing, clearPairing, resumeReturnedPairing, onPageWake, isAllowedReturn } from './pair.js';
+export type { PairingOptions, PairConnectionOptions, PairStorage, PairedWallet, SocketLike, SocketFactory, FoldedSignIn, ResumeOptions, ResumedPairing } from './pair.js';
+export { signInWithBwalletX, signInAndVerify, connectBwalletX, waitIfLocked, challengeWantsIdentityKey, foldableLogin, LOGIN_PROTOCOL } from './signin.js';
 export type { Challenge, SignInAndVerifyOptions, SignInOptions, SignInResult, SignInMethod, SignInStage, SignInStatus } from './signin.js';
 export { renderButton, LOGO_URL } from './button.js';
 export type { ButtonOptions } from './button.js';

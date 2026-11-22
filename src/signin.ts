@@ -1,6 +1,7 @@
 import type { WalletInterface, WalletProtocol } from '@bsv/sdk';
 import { discoverBwalletX, DEFAULT_DISCOVER_MS } from './discover.js';
 import { pairBwalletX, restorePairing, type PairingOptions } from './pair.js';
+import { loginMessageFor } from './protocol.js';
 import { asWalletInterface, type Brc100Wallet } from './wallet-like.js';
 
 /** Security level 2, a protocol name used for nothing else. */
@@ -12,6 +13,27 @@ export interface Challenge {
   message: string;
   keyID: string;
   protocolID?: WalletProtocol;
+  /** ms since 1970 (createChallenge sends it). */
+  expiresAt?: number;
+}
+
+/**
+ * (0.9.0) The challenge as PairingOptions.login, when bWalletX can sign it with Connect: the standard sign-in text
+ * (createChallenge) for this page's origin under the login protocol. Anything else (a custom challenge) is not folded
+ * and goes the usual way, as a request after pairing.
+ */
+export function foldableLogin(c: Challenge | null | undefined, origin: string): { nonce: string; expiresAt: string } | undefined {
+  if (!c || typeof c.message !== 'string' || typeof c.keyID !== 'string') return undefined;
+  const p = c.protocolID;
+  if (p && !(p[0] === LOGIN_PROTOCOL[0] && p[1] === LOGIN_PROTOCOL[1])) return undefined;
+  const m = /\nExpires: (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)$/.exec(c.message);
+  if (!m) return undefined;
+  try {
+    if (c.message !== loginMessageFor(origin, c.keyID, m[1])) return undefined;
+  } catch {
+    return undefined;
+  }
+  return { nonce: c.keyID, expiresAt: m[1] };
 }
 
 export type SignInMethod = 'extension' | 'in-app' | 'pairing' | 'wallet';
