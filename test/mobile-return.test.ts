@@ -308,7 +308,11 @@ describe('review 22 Nov: a forged return fragment', () => {
     await tick(20);
     const hash = await forge(link, attacker);
     const r = await resumeReturnedPairing({ hash, href: `${ORIGIN}/${hash}`, replaceUrl: () => {}, returnStorage: returns, storage: mapStorage(), socket: relay.socket, waitMs: 1000 });
-    expect(r?.login?.identityKey).toBe(real.toPublicKey().toString());
+    // The real wallet pairs (over the relay). The forger's sign-in is never used, and the real one never travels over
+    // the relay (CTO 22 Nov), so this tab has no sign-in from the forged fragment: it asks the usual way.
+    expect(r).not.toBeNull();
+    expect(r?.login?.identityKey).not.toBe(attacker.toPublicKey().toString());
+    expect(r?.login).toBeNull();
   });
 
   it('never signs in the same tab on a forged fragment; the real wallet still can', async () => {
@@ -325,7 +329,10 @@ describe('review 22 Nov: a forged return fragment', () => {
     wake.fire();
     await tick(50);
     expect(done).toBeNull();
-    fakePhone(link, relay.socket, real, { fold: true });
+    const phone = fakePhone(link, relay.socket, real, { fold: true });
+    await tick(30);
+    hash = new URL(phone.returnTo!).hash; // the real wallet's own return
+    wake.fire();
     const w = await p;
     expect(w.signedIn?.identityKey).toBe(real.toPublicKey().toString());
   });

@@ -57,7 +57,7 @@ export function fakePhone(link: string, socket: SocketFactory, root: PrivateKey,
   /** The ready with the signature, for the return fragment only. */
   const loginReady = async (): Promise<PairMessage> => {
     if (!folded()) return { t: 'ready' };
-    const message = loginMessageFor(l.o, l.ln, l.lx);
+    const message = loginMessageFor(l.o, l.ln!, l.lx!);
     const { signature } = (await pw.createSignature({
       protocolID: [2, 'bwallet sign in'],
       keyID: l.ln,
