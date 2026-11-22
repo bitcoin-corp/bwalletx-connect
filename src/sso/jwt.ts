@@ -49,25 +49,28 @@ type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 const JWKS_TTL_MS = 5 * 60 * 1000;
 const REFETCH_GAP_MS = 30 * 1000;
-const cache = new Map<string, { at: number; keys: Map<string, Promise<CryptoKey>> }>();
+const cache = new Map<string, { at: number; keys: Map<string, CryptoKey> }>();
 
 /** Forget cached JWKS (tests, or after a key rotation you know about). */
 export function clearJwksCache(): void {
   cache.clear();
 }
 
-async function loadJwks(hub: string, f: FetchLike): Promise<Map<string, Promise<CryptoKey>>> {
+async function loadJwks(hub: string, f: FetchLike): Promise<Map<string, CryptoKey>> {
   // redirect: 'error': the keys come from the hub itself, never from wherever a redirect points.
   const r = await f(`${hub}/.well-known/jwks.json`, { headers: { accept: 'application/json' }, redirect: 'error' });
   if (!r.ok) throw new SsoError('jwks_unavailable', `The sign-in hub's keys could not be read (${r.status})`);
   const body = (await r.json()) as { keys?: HubJwk[] };
-  const keys = new Map<string, Promise<CryptoKey>>();
-  for (const k of body.keys ?? []) {
+  const keys = new Map<string, CryptoKey>();
+  for (const k of Array.isArray(body?.keys) ? body.keys : []) {
     if (k?.kty !== 'EC' || k.crv !== 'P-256' || typeof k.kid !== 'string' || typeof k.x !== 'string' || typeof k.y !== 'string') continue;
-    keys.set(
-      k.kid,
-      globalThis.crypto.subtle.importKey('jwk', { kty: 'EC', crv: 'P-256', x: k.x, y: k.y, ext: true }, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']),
-    );
+    // Each import is awaited here: a malformed key is skipped, never left as a rejected promise nobody awaits
+    // (an unhandled rejection can end a Node process).
+    try {
+      keys.set(k.kid, await globalThis.crypto.subtle.importKey('jwk', { kty: 'EC', crv: 'P-256', x: k.x, y: k.y, ext: true }, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']));
+    } catch {
+      /* not a P-256 point: skip it */
+    }
   }
   return keys;
 }
@@ -82,8 +85,7 @@ async function keyFor(hub: string, kid: string, f: FetchLike, now: number): Prom
     c = { at: now, keys: await loadJwks(hub, f) };
     cache.set(hub, c);
   }
-  const k = c.keys.get(kid);
-  return k ? await k : null;
+  return c.keys.get(kid) ?? null;
 }
 
 export interface VerifyHubTokenOptions {
@@ -138,5 +140,9 @@ export async function verifyHubToken(token: unknown, o: VerifyHubTokenOptions): 
   if (typeof claims.sid !== 'string' || !claims.sid) throw new SsoError('bad_token', 'Token has no session id');
   if (typeof claims.epoch !== 'number') throw new SsoError('bad_token', 'Token has no session epoch');
   if (claims.tier !== 'standard' && claims.tier !== 'high') throw new SsoError('bad_token', 'Token has no risk tier');
+  // auth_time drives requireFresh: a token without one (or from the future) is refused, never treated as "just now".
+  if (typeof claims.auth_time !== 'number' || !Number.isFinite(claims.auth_time) || claims.auth_time > t + skew || claims.auth_time > claims.iat + skew) {
+    throw new SsoError('bad_token', 'Token has no valid auth_time');
+  }
   return { ...claims, identityKey: claims.sub };
 }

@@ -81,4 +81,23 @@ describe('bwxSso', () => {
       vi.restoreAllMocks();
     }
   });
+
+  it('on https the tx cookie is written as __Host-bwx_sso_… with Secure, Path=/ and no Domain (review 2)', async () => {
+    mockSession({ signedIn: false });
+    const assign = vi.fn();
+    vi.spyOn(window, 'location', 'get').mockReturnValue({ ...window.location, assign, origin: 'https://site.example', search: '', href: 'https://site.example/', pathname: '/', hash: '', protocol: 'https:' } as Location);
+    const written: string[] = [];
+    vi.spyOn(document, 'cookie', 'set').mockImplementation((v: string) => void written.push(v));
+    const s = bwxSso({ clientId: 'site', hub: 'https://id.example', silent: false });
+    await tick(5);
+    window.dispatchEvent(new Event('bwx:signin'));
+    await tick(20);
+    const state = new URL(assign.mock.calls[0][0]).searchParams.get('state')!;
+    const c = written.find((w) => w.startsWith('__Host-bwx_sso_'))!;
+    expect(c.startsWith(`__Host-bwx_sso_${state.slice(0, 12)}=`)).toBe(true);
+    expect(c).toMatch(/; Secure/);
+    expect(c).toMatch(/; Path=\//);
+    expect(c).not.toMatch(/Domain=/i);
+    s.destroy();
+  });
 });

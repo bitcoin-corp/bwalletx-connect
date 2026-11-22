@@ -166,9 +166,10 @@ export function bwxSso(opts: BwxSsoOptions): BwxSso {
     const state = randomToken(32);
     const verifier = randomToken(48);
     const returnTo = safeReturnTo(o.returnTo ?? currentReturnTo(opts.returnTo), '/');
-    const secure = location.protocol === 'https:' ? '; Secure' : '';
-    // Readable by your server at /sso/callback; single use, 10 minutes, this attempt only.
-    document.cookie = `${txCookieName(state)}=${encodeTx({ state, verifier, returnTo })}; Path=/; Max-Age=600; SameSite=Lax${secure}`;
+    const https = location.protocol === 'https:';
+    // Readable by your server at /sso/callback; single use, 10 minutes, this attempt only. On https the name is
+    // __Host-… (Secure, Path=/, no Domain), so a sibling subdomain can't plant one for the callback to read.
+    document.cookie = `${txCookieName(state, https)}=${encodeTx({ state, verifier, returnTo })}; Path=/; Max-Age=600; SameSite=Lax${https ? '; Secure' : ''}`;
     const q = new URLSearchParams({
       response_type: 'code',
       client_id: opts.clientId,

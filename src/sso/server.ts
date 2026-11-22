@@ -20,6 +20,7 @@ import {
   SITE_COOKIE,
   SITE_COOKIE_SECURE,
   TIER_SESSION_SECONDS,
+  clientBasicAuth,
   decodeTx,
   hubOrigin,
   logoutHint,
@@ -69,6 +70,11 @@ export interface SsoOptions {
   clientId: string;
   /** HMAC secret for your site's session cookie, 32+ chars, from env. Never commit it. */
   secret: string;
+  /**
+   * Your client secret at the hub (the hub's owner gives it to you; from env, never committed). Sent as HTTP Basic auth
+   * on /token and /session/epoch, and the key of your "Sign out of all" logout_hint. Required by the production hub.
+   */
+  clientSecret?: string;
   /** Default https://id.bwalletx.com. */
   hub?: string;
   /** Default /sso/callback. Must match the redirect URI registered for your site. */
@@ -84,6 +90,14 @@ export interface SsoOptions {
   secureCookie?: boolean;
   /** How long a hub epoch answer is trusted, seconds. Default 300 (the spec's ≤ 5 min). */
   epochCacheSeconds?: number;
+  /**
+   * How long a standard session may go on without a good answer from the hub (outage or rate limit), seconds, counted
+   * from the last good check. After that it is refused until the hub answers again. Default 86400 (24 h). High-tier
+   * sessions get no grace.
+   */
+  epochGraceSeconds?: number;
+  /** Epoch checks that start within this many ms go to the hub as one request. Default 10. */
+  epochBatchMs?: number;
   /**
    * After the hub's token is verified, before your cookie is set: map the identity to your user, look things up.
    * Return extra claims (uid…) to store, or false to refuse the sign-in.
@@ -126,9 +140,15 @@ export interface VerifyResult {
   session: SiteSession | null;
   /** Set-Cookie values to send back (sliding refresh, epoch check stamp, or clearing a dead session). */
   setCookie: string[];
+  /**
+   * The hub epoch check on this call, if one was due: 'ok', 'rate_limited' (the hub said 429; backing off as it asked)
+   * or 'unavailable' (outage, 5xx, refused credentials; backing off). Undefined when no check was due.
+   */
+  hub?: 'ok' | 'rate_limited' | 'unavailable';
 }
 
-const nowS = (o: SsoOptions) => Math.floor((o.now?.() ?? Date.now()) / 1000);
+const nowMs = (o: SsoOptions) => o.now?.() ?? Date.now();
+const nowS = (o: SsoOptions) => Math.floor(nowMs(o) / 1000);
 const isLocalhost = (u: URL) => u.hostname === 'localhost';
 const secureFor = (o: SsoOptions, req: Request) => o.secureCookie ?? !isLocalhost(new URL(req.url));
 
@@ -141,12 +161,23 @@ export function siteCookieName(o: Pick<SsoOptions, 'cookieName' | 'secureCookie'
 
 // Hub epoch answers shared by requests in this process, keyed by hub + sid.
 const epochCache = new Map<string, { at: number; active: boolean; epoch: number | null }>();
+// Back-off per hub + client after a 429 or an outage, so a struggling hub isn't hammered by every request.
+const backoffs = new Map<string, { until: number; kind: 'rate_limited' | 'unavailable'; step: number }>();
+// Epoch checks waiting to go to the hub together.
+const batches = new Map<string, { sids: Map<string, ((o: EpochOutcome) => void)[]>; o: SsoOptions }>();
+/** Forget cached epoch answers and back-offs (tests). */
 export function clearEpochCache(): void {
   epochCache.clear();
+  backoffs.clear();
 }
 
 function txClear(name: string, secure: boolean): string {
   return serializeCookie('', { name, maxAge: 0, secure, sameSite: 'Lax', path: '/' });
+}
+
+/** Authorization header for the hub's server-to-server endpoints, when this site has its client secret. */
+function clientAuth(o: SsoOptions): Record<string, string> {
+  return o.clientSecret ? { authorization: clientBasicAuth(o.clientId, o.clientSecret) } : {};
 }
 
 function siteOrigin(o: SsoOptions, req: Request): string | null {
@@ -192,7 +223,8 @@ export async function handleSsoCallback(req: Request, o: SsoOptions): Promise<Re
   const hub = hubOrigin(o.hub ?? DEFAULT_HUB);
   const secure = secureFor(o, req);
   const state = url.searchParams.get('state') ?? '';
-  const name = state ? txCookieName(state) : '';
+  // __Host- name on https: a tx cookie planted by a sibling subdomain (no __Host- prefix possible there) is never read.
+  const name = state ? txCookieName(state, secure) : '';
   const tx = name ? decodeTx(readCookie(req.headers.get('cookie'), name)) : null;
   const clear = name ? [txClear(name, secure)] : [];
   const back = safeReturnTo(tx?.returnTo, '/');
@@ -215,7 +247,7 @@ export async function handleSsoCallback(req: Request, o: SsoOptions): Promise<Re
     const r = await (o.fetch ?? fetch)(`${hub}/token`, {
       method: 'POST',
       redirect: 'error', // the code and verifier go to the hub only, never to wherever a redirect points
-      headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
+      headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json', ...clientAuth(o) },
       body: new URLSearchParams({
         grant_type: 'authorization_code',
         code,
@@ -251,33 +283,96 @@ export async function handleSsoCallback(req: Request, o: SsoOptions): Promise<Re
     ...(claims.handle ? { handle: claims.handle } : {}),
     chk: t,
     st: t,
-    at: typeof claims.auth_time === 'number' ? claims.auth_time : t,
+    at: claims.auth_time, // verifyHubToken refuses a token without one
     sj: randomToken(12),
   });
   return redirect(back, [...clear, cookie]);
 }
 
-async function hubEpoch(o: SsoOptions, sid: string): Promise<{ active: boolean; epoch: number | null } | null> {
+type EpochOutcome = { kind: 'ok'; active: boolean; epoch: number | null } | { kind: 'rate_limited' | 'unavailable' };
+
+const backoffKey = (o: SsoOptions) => `${hubOrigin(o.hub ?? DEFAULT_HUB)} ${o.clientId}`;
+
+function backOff(o: SsoOptions, kind: 'rate_limited' | 'unavailable', retryAfterS?: number): void {
+  const k = backoffKey(o);
+  const step = (backoffs.get(k)?.step ?? 0) + 1;
+  const s =
+    kind === 'rate_limited'
+      ? Math.min(300, Math.max(1, retryAfterS ?? 30 * 2 ** (step - 1))) // as the hub asked, else 30 s doubling, ≤ 5 min
+      : Math.min(120, 5 * 2 ** (step - 1)); // outage: 5 s doubling, ≤ 2 min
+  backoffs.set(k, { until: nowMs(o) + s * 1000, kind, step });
+}
+
+/** POST /session/epoch { sids } for every check waiting in this batch. One call per batch window, authenticated. */
+async function flushBatch(key: string): Promise<void> {
+  const b = batches.get(key);
+  batches.delete(key);
+  if (!b) return;
+  const { o } = b;
+  const sids = [...b.sids.keys()];
+  const settle = (sid: string, v: EpochOutcome) => b.sids.get(sid)?.forEach((r) => r(v));
+  const all = (v: EpochOutcome) => sids.forEach((sid) => settle(sid, v));
   const hub = hubOrigin(o.hub ?? DEFAULT_HUB);
-  const key = `${hub} ${sid}`;
-  const now = o.now?.() ?? Date.now();
-  const hit = epochCache.get(key);
-  if (hit && now - hit.at < (o.epochCacheSeconds ?? 300) * 1000) return hit;
+  let r: Response;
   try {
-    const r = await (o.fetch ?? fetch)(`${hub}/session/epoch?sid=${encodeURIComponent(sid)}`, {
-      headers: { accept: 'application/json' },
+    r = await (o.fetch ?? fetch)(`${hub}/session/epoch`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json', ...clientAuth(o) },
+      body: JSON.stringify({ sids }),
       redirect: 'error',
       signal: AbortSignal.timeout(3000),
     });
-    if (!r.ok) return null;
-    const b = (await r.json()) as { active?: unknown; epoch?: unknown };
-    const v = { at: now, active: b.active === true, epoch: typeof b.epoch === 'number' ? b.epoch : null };
-    epochCache.set(key, v);
-    if (epochCache.size > 10000) epochCache.delete(epochCache.keys().next().value as string);
-    return v;
   } catch {
-    return null;
+    backOff(o, 'unavailable');
+    return all({ kind: 'unavailable' });
   }
+  if (r.status === 429) {
+    const ra = Number(r.headers.get('retry-after'));
+    backOff(o, 'rate_limited', Number.isFinite(ra) && ra > 0 ? ra : undefined);
+    return all({ kind: 'rate_limited' });
+  }
+  type Batch = { sessions?: { sid?: unknown; active?: unknown; epoch?: unknown }[] };
+  const body = r.ok ? ((await r.json().catch(() => null)) as Batch | null) : null;
+  if (!r.ok || !body || !Array.isArray(body.sessions)) {
+    backOff(o, 'unavailable'); // 5xx, 401 (wrong client secret) or a body we can't read
+    return all({ kind: 'unavailable' });
+  }
+  backoffs.delete(backoffKey(o));
+  const at = nowMs(o);
+  const got = new Map(body.sessions.filter((x) => typeof x?.sid === 'string').map((x) => [x.sid as string, x]));
+  for (const sid of sids) {
+    const x = got.get(sid);
+    if (!x) {
+      settle(sid, { kind: 'unavailable' }); // the hub left it out: unknown, not "signed out"
+      continue;
+    }
+    const v = { at, active: x.active === true, epoch: typeof x.epoch === 'number' ? x.epoch : null };
+    epochCache.set(`${hub} ${sid}`, v);
+    if (epochCache.size > 10000) epochCache.delete(epochCache.keys().next().value as string);
+    settle(sid, { kind: 'ok', active: v.active, epoch: v.epoch });
+  }
+}
+
+/** The hub's answer for a sid: cached (≤ epochCacheSeconds), or batched with other checks, or the back-off state. */
+async function hubEpoch(o: SsoOptions, sid: string): Promise<EpochOutcome> {
+  const hub = hubOrigin(o.hub ?? DEFAULT_HUB);
+  const now = nowMs(o);
+  const hit = epochCache.get(`${hub} ${sid}`);
+  if (hit && now - hit.at < (o.epochCacheSeconds ?? 300) * 1000) return { kind: 'ok', active: hit.active, epoch: hit.epoch };
+  const bo = backoffs.get(backoffKey(o));
+  if (bo && now < bo.until) return { kind: bo.kind };
+  const key = `${backoffKey(o)} ${o.clientSecret ? 'auth' : 'anon'}`;
+  let b = batches.get(key);
+  if (!b) {
+    b = { sids: new Map(), o };
+    batches.set(key, b);
+    setTimeout(() => void flushBatch(key), Math.max(0, o.epochBatchMs ?? 10));
+  }
+  const waiting = b.sids.get(sid) ?? [];
+  b.sids.set(sid, waiting);
+  const p = new Promise<EpochOutcome>((resolve) => waiting.push(resolve));
+  if (b.sids.size >= 100) void flushBatch(key);
+  return p;
 }
 
 /**
@@ -296,29 +391,33 @@ export async function verifySiteSession(req: Request, o: SsoOptions): Promise<Ve
   const t = nowS(o);
   let next: SiteSession = s;
   let changed = false;
+  let hubState: VerifyResult['hub'];
   if (t - (s.chk ?? 0) >= (o.epochCacheSeconds ?? 300)) {
     const e = await hubEpoch(o, s.sid);
-    if (!e) {
-      if (s.tier === 'high') return { session: null, setCookie: [] };
+    hubState = e.kind;
+    if (e.kind !== 'ok') {
+      // No good answer (rate limited or down). High tier: refused. Standard: carries on only within the grace period
+      // since the last good check. The cookie is kept either way: it works again once the hub answers.
+      if (s.tier === 'high' || t - (s.chk ?? 0) > (o.epochGraceSeconds ?? 86400)) return { session: null, setCookie: [], hub: hubState };
     } else {
-      if (!e.active || e.epoch !== s.ep) return dead;
+      if (!e.active || e.epoch !== s.ep) return { ...dead, hub: hubState };
       next = { ...next, chk: t };
       changed = true;
     }
   }
   // Sliding: a standard session seen a day after its last refresh gets a fresh 30 days.
   if (next.tier === 'standard' && t - next.iat >= 24 * 3600) changed = true;
-  if (!changed) return { session: next, setCookie: [] };
+  if (!changed) return { session: next, setCookie: [], hub: hubState };
   const { iat: _iat, exp: _exp, ...rest } = next;
   void _iat;
   void _exp;
-  return { session: next, setCookie: [await sessionCookie(o, req, rest as SiteSessionClaims)] };
+  return { session: next, setCookie: [await sessionCookie(o, req, rest as SiteSessionClaims)], hub: hubState };
 }
 
 /**
  * The hub's logout URL ("Sign out of all b*X sites"), coming back to this origin's home page. With a logout_hint
- * (logoutHint(sid), made by this site's server from the visitor's session) the hub signs out at once; without one it
- * shows a confirm page, so a link on a foreign page can't sign anyone out of everything.
+ * (logoutHint: an HMAC with this site's client secret over the visitor's sid) the hub signs out at once; without one
+ * it shows a confirm page, so a link on a foreign page can't sign anyone out of everything.
  */
 export function hubLogoutUrl(o: Pick<SsoOptions, 'clientId' | 'hub'>, siteOrigin: string, hint?: string): string {
   const q = new URLSearchParams({ client_id: o.clientId, redirect_uri: new URL(siteOrigin).origin + '/' });
@@ -391,16 +490,22 @@ export function createSso(o: SsoOptions): Sso {
     async logout(req) {
       if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
       const origin = new URL(req.url).origin;
-      // CSRF: a cross-site form can't sign you out (browsers send Origin on POST).
+      // CSRF: a cross-site (or sibling-subdomain) form can't sign you out. Browsers send Origin on POST, and modern
+      // ones Sec-Fetch-Site, which must say same-origin (same-site would let a sibling subdomain in).
       const from = req.headers.get('origin');
       if (from && from !== origin) return json({ error: 'Wrong origin' }, 403);
+      const sfs = req.headers.get('sec-fetch-site');
+      if (sfs && sfs !== 'same-origin') return json({ error: 'Wrong origin' }, 403);
       const everywhere = new URL(req.url).searchParams.get('everywhere') === '1';
       // The session as signed (HMAC and expiry only: no hub round trip needed to sign out).
       const raw = readCookie(req.headers.get('cookie'), siteCookieName(o, req));
       const s = raw ? ((await verifySession(raw, { secret: o.secret, now: o.now?.() })) as SiteSession | null) : null;
       const mine = s && s.aud === o.clientId ? s : null;
       if (mine && o.revocations && typeof mine.sj === 'string') await o.revocations.revoke(mine.sj, mine.exp);
-      const hint = everywhere && mine && typeof mine.sid === 'string' ? await logoutHint(mine.sid, nowS(o)) : undefined;
+      const hint =
+        everywhere && mine && typeof mine.sid === 'string' && o.clientSecret
+          ? await logoutHint(mine.sid, { clientId: o.clientId, clientSecret: o.clientSecret }, nowS(o))
+          : undefined;
       return json({ ok: true, redirect: everywhere ? hubLogoutUrl(o, origin, hint) : null }, 200, [clearSiteCookie(o, req)]);
     },
   };

@@ -132,7 +132,11 @@ authorises spending (payments still go through a wallet sheet).
 ```ts
 // lib/sso.ts (server)
 import { createSso } from '@bwalletx/connect/sso/server';
-export const sso = createSso({ clientId: 'your-site', secret: process.env.BWX_SITE_SECRET! });
+export const sso = createSso({
+  clientId: 'your-site',
+  secret: process.env.BWX_SITE_SECRET!, // your own cookie HMAC key, 32+ chars
+  clientSecret: process.env.BWX_CLIENT_SECRET, // from the hub's owner: /token, /session/epoch, logout hint
+});
 // app/sso/callback/route.ts → export const GET = sso.callback;
 // app/sso/session/route.ts  → export const GET = sso.session;
 // app/sso/logout/route.ts   → export const POST = sso.logout;
@@ -148,6 +152,10 @@ bwxSso({ clientId: 'your-site', accountUrl: '/dashboard' });
 
 Static sites: `<script src="/connect/bwalletx-sso.global.js"></script>` then `bwxSso({ clientId })`. Your redirect URI
 (`https://your.site/sso/callback`) must be in the hub's registry exactly.
+
+If the hub can't be reached (or rate-limits the epoch check), a standard session carries on for at most
+`epochGraceSeconds` (default 24 h) after the last good check, then is refused until the hub answers; a high-tier session
+is refused at once. `verify()` reports the check in `hub` (`'ok'`, `'rate_limited'`, `'unavailable'`).
 
 ## Payments
 
@@ -381,7 +389,7 @@ Nonce: <nonce>
 Expires: <ISO time>
 ```
 
-It is signed with BRC-100 `createSignature`, protocol `[2, 'bwallet sign in']`, keyID = the nonce, counterparty `'anyone'`. bChat and bit-sign use the same format. The b*X hub (id.bwalletx.com) is the one exception: it signs in under its own `HUB_SIGNIN_PROTOCOL` (`[2, 'bwalletx id sign in']`), which bWalletX accepts from that origin only.
+It is signed with BRC-100 `createSignature`, protocol `[2, 'bwallet sign in']`, keyID = the nonce, counterparty `'anyone'`. bChat and bit-sign use the same format. The b*X hub (id.bwalletx.com) does not use it. Wallets sign in to the hub in their own flow, with the admin-reserved `HUB_SIGNIN_PROTOCOL` (`[2, 'admin bwalletx hub signin']`), and POST the signature straight to the hub (hub sign-in v2, `docs/HUB-SIGNIN-V2.md` in bitcoin-corp/bwalletx-id). No web page can ask a BRC-100 wallet for an `admin…` protocol.
 
 ### Nonce store
 

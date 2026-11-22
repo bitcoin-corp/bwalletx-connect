@@ -13,6 +13,8 @@ export const SITE_COOKIE = 'bwx_site';
 export const SITE_COOKIE_SECURE = '__Host-bwx_site';
 /** Prefix of the short-lived sign-in transaction cookie (state + PKCE verifier + returnTo), one per attempt. */
 export const TX_COOKIE_PREFIX = 'bwx_sso_';
+/** On https the tx cookie is __Host-bwx_sso_…, so a sibling subdomain can't plant one (cookie tossing). */
+export const TX_COOKIE_PREFIX_SECURE = '__Host-bwx_sso_';
 /** The event any page dispatches to open sign-in: window.dispatchEvent(new Event('bwx:signin')). */
 export const SIGNIN_EVENT = 'bwx:signin';
 export const GET_BWALLETX_URL = 'https://bwalletx.com/get';
@@ -22,29 +24,97 @@ export type RiskTier = 'standard' | 'high';
 export const TIER_SESSION_SECONDS: Record<RiskTier, number> = { standard: 30 * 24 * 3600, high: 3600 };
 
 /**
- * The wallet protocol the hub's sign-in signs under. Only id.bwalletx.com uses it, and bWalletX pins it to that origin
- * (it refuses the protocol anywhere else), so a site can't relay the hub's challenge to the wallet and replay the
- * signature at the hub. Sites keep using the shared [2, 'bwallet sign in'] for their own sign-ins.
+ * Hub sign-in v2 (docs/HUB-SIGNIN-V2.md in bitcoin-corp/bwalletx-id). The wallet signs and POSTs straight to the hub
+ * (HUB_SIGNIN_ORIGIN + HUB_WALLET_SIGNIN_PATH, over TLS, URL hard-coded in the wallet); the hub never accepts a
+ * signature that a web page or a relay delivers.
+ *
+ * The protocol name starts with "admin": BRC-100 reserves those names for the wallet itself, so a wallet that follows
+ * BRC-100 (wallet-toolbox's WalletPermissionsManager) refuses a website that asks for it. Nothing here makes any wallet
+ * refuse it; that is the wallet's job (bWalletX from 5.2.62). Sites keep using [2, 'bwallet sign in'] for their own
+ * sign-ins.
  */
-export const HUB_SIGNIN_PROTOCOL: [2, string] = [2, 'bwalletx id sign in'];
-export const HUB_SIGNIN_PROTOCOL_NAME = 'bwalletx id sign in';
-/** The only origin bWalletX accepts HUB_SIGNIN_PROTOCOL from. */
+export const HUB_SIGNIN_PROTOCOL: [2, string] = [2, 'admin bwalletx hub signin'];
+export const HUB_SIGNIN_PROTOCOL_NAME = 'admin bwalletx hub signin';
+/** The hub a wallet signs in to. Wallets hard-code it; they never take it from a link or a page. */
 export const HUB_SIGNIN_ORIGIN = DEFAULT_HUB;
+/** GET ?r=<request> (or ?code=<user code>) for what to show; POST the signature. */
+export const HUB_WALLET_SIGNIN_PATH = '/api/wallet-signin';
 
-/** The text the wallet signs at the hub: "Sign in to id.bwalletx.com · challenge <nonce> · <ISO time>". */
-export function hubSignInMessage(hub: string, nonce: string, issuedAt: number | Date): string {
-  const iso = (typeof issuedAt === 'number' ? new Date(issuedAt) : issuedAt).toISOString();
-  return `Sign in to ${new URL(hub).host} · challenge ${nonce} · ${iso}`;
+/** RFC 8628 §6.1: 20 consonants, no vowels (no words), no look-alikes. */
+export const USER_CODE_ALPHABET = 'BCDFGHJKLMNPQRSTVWXZ';
+const USER_CODE_RE = /^[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}$/;
+/** "BCDF-GHJK": the code the hub page and the wallet both show. */
+export const isHubUserCode = (v: unknown): v is string => typeof v === 'string' && USER_CODE_RE.test(v);
+const REQUEST_ID_RE = /^[A-Za-z0-9_-]{22,64}$/;
+export const isHubRequestId = (v: unknown): v is string => typeof v === 'string' && REQUEST_ID_RE.test(v);
+
+export interface HubSignInFields {
+  /** The hub's origin (its host goes in the message). */
+  hub: string;
+  /** The pending sign-in's id (also the signature's keyID). */
+  requestId: string;
+  userCode: string;
+  /** The site the sign-in continues to, or null for the hub itself. */
+  clientId: string | null;
+  /** ms since 1970. */
+  issuedAt: number;
 }
 
-/** Parse a hub sign-in message: { host, nonce, issuedAt } or null if it isn't exactly in that form. */
-export function parseHubSignInMessage(m: unknown): { host: string; nonce: string; issuedAt: number } | null {
-  if (typeof m !== 'string' || m.length > 300) return null;
-  const x = /^Sign in to ([a-z0-9.-]+(?::\d{1,5})?) · challenge ([A-Za-z0-9_-]{16,64}) · (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)$/.exec(m);
+/**
+ * The exact text the wallet signs (newline-separated, no trailing newline):
+ *   bWalletX hub sign-in v2
+ *   Hub: id.bwalletx.com
+ *   Request: <request id>
+ *   Code: BCDF-GHJK
+ *   Site: <client_id or ->
+ *   Issued: <ISO time>
+ */
+export function hubSignInMessage(f: HubSignInFields): string {
+  if (!isHubRequestId(f.requestId)) throw new Error('bad request id');
+  if (!isHubUserCode(f.userCode)) throw new Error('bad user code');
+  if (f.clientId !== null && !/^[a-z0-9][a-z0-9-]{0,62}$/.test(f.clientId)) throw new Error('bad client id');
+  return [
+    'bWalletX hub sign-in v2',
+    `Hub: ${new URL(f.hub).host}`,
+    `Request: ${f.requestId}`,
+    `Code: ${f.userCode}`,
+    `Site: ${f.clientId ?? '-'}`,
+    `Issued: ${new Date(f.issuedAt).toISOString()}`,
+  ].join('\n');
+}
+
+/** The fields of a v2 hub sign-in message, or null unless it is exactly in that form. */
+export function parseHubSignInMessage(m: unknown): { host: string; requestId: string; userCode: string; clientId: string | null; issuedAt: number } | null {
+  if (typeof m !== 'string' || m.length > 400) return null;
+  const x =
+    /^bWalletX hub sign-in v2\nHub: ([a-z0-9.-]+(?::\d{1,5})?)\nRequest: ([A-Za-z0-9_-]{22,64})\nCode: ([BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4})\nSite: ([a-z0-9][a-z0-9-]{0,62}|-)\nIssued: (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)$/.exec(
+      m,
+    );
   if (!x) return null;
-  const issuedAt = Date.parse(x[3]);
-  if (!Number.isFinite(issuedAt) || new Date(issuedAt).toISOString() !== x[3]) return null;
-  return { host: x[1], nonce: x[2], issuedAt };
+  const issuedAt = Date.parse(x[5]);
+  if (!Number.isFinite(issuedAt) || new Date(issuedAt).toISOString() !== x[5]) return null;
+  return { host: x[1], requestId: x[2], userCode: x[3], clientId: x[4] === '-' ? null : x[4], issuedAt };
+}
+
+/** RFC 6749 §2.3.1 client_secret_basic: Basic base64(form-encoded id ":" form-encoded secret). */
+export function clientBasicAuth(clientId: string, clientSecret: string): string {
+  const fe = (s: string) => encodeURIComponent(s).replace(/%20/g, '+');
+  return 'Basic ' + btoa(`${fe(clientId)}:${fe(clientSecret)}`);
+}
+
+/** The client id and secret from an Authorization: Basic header, or null. */
+export function parseClientBasicAuth(h: string | null | undefined): { clientId: string; clientSecret: string } | null {
+  const m = /^Basic ([A-Za-z0-9+/=]{4,1024})$/.exec(h ?? '');
+  if (!m) return null;
+  try {
+    const raw = atob(m[1]);
+    const i = raw.indexOf(':');
+    if (i < 1) return null;
+    const fd = (s: string) => decodeURIComponent(s.replace(/\+/g, ' '));
+    return { clientId: fd(raw.slice(0, i)), clientSecret: fd(raw.slice(i + 1)) };
+  } catch {
+    return null;
+  }
 }
 
 const enc = new TextEncoder();
@@ -103,33 +173,43 @@ export function safeReturnTo(v: unknown, fallback = '/'): string {
   return out.startsWith('/') && !out.startsWith('//') ? out : fallback;
 }
 
-/** "Sign out of all" from a site: proves to the hub that the request comes from a site holding this hub session (sid). */
+/** "Sign out of all" from a site: proves to the hub that this site's server sent it, for this hub session (sid). */
 const LOGOUT_HINT_SECONDS = 300;
-async function logoutDigest(sid: string, t: number): Promise<string> {
-  return b64url(new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', enc.encode(`bwx-logout:${sid}:${t}`))));
+export interface ClientCredentials {
+  clientId: string;
+  clientSecret: string;
+}
+async function logoutMac(sid: string, c: ClientCredentials, t: number): Promise<string> {
+  const key = await globalThis.crypto.subtle.importKey('raw', enc.encode(c.clientSecret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  return b64url(new Uint8Array(await globalThis.crypto.subtle.sign('HMAC', key, enc.encode(`bwx-logout:v2:${c.clientId}:${sid}:${t}`))));
 }
 /**
- * The logout_hint a site adds to the hub's /logout link: "<t>.<base64url(SHA-256('bwx-logout:' + sid + ':' + t))>".
- * Only the hub and the site's server know a visitor's sid, so a foreign page can't make one; it lasts 5 minutes.
+ * The logout_hint a site adds to the hub's /logout link: "<t>.<base64url(HMAC-SHA256(client secret,
+ * 'bwx-logout:v2:' + client_id + ':' + sid + ':' + t))>". Only that site's server and the hub know the client secret,
+ * so no one else can make one, even knowing the sid; it lasts 5 minutes.
  */
-export async function logoutHint(sid: string, nowS: number = Math.floor(Date.now() / 1000)): Promise<string> {
-  return `${nowS}.${await logoutDigest(sid, nowS)}`;
+export async function logoutHint(sid: string, c: ClientCredentials, nowS: number = Math.floor(Date.now() / 1000)): Promise<string> {
+  return `${nowS}.${await logoutMac(sid, c, nowS)}`;
 }
-/** The hub's check of a logout_hint against the session in its cookie. */
-export async function checkLogoutHint(hint: unknown, sid: string, nowS: number = Math.floor(Date.now() / 1000)): Promise<boolean> {
-  if (typeof hint !== 'string' || hint.length > 128 || !sid) return false;
+/** The hub's check of a logout_hint against the session in its cookie and the client named in the request. */
+export async function checkLogoutHint(hint: unknown, sid: string, c: ClientCredentials, nowS: number = Math.floor(Date.now() / 1000)): Promise<boolean> {
+  if (typeof hint !== 'string' || hint.length > 128 || !sid || !c?.clientId || !c.clientSecret) return false;
   const m = /^(\d{9,11})\.([A-Za-z0-9_-]{43})$/.exec(hint);
   if (!m) return false;
   const t = Number(m[1]);
   if (t > nowS + 30 || nowS - t > LOGOUT_HINT_SECONDS) return false;
-  return sameString(m[2], await logoutDigest(sid, t));
+  return sameString(m[2], await logoutMac(sid, c, t));
 }
 
 /** Strip a trailing slash: "https://id.bwalletx.com/" → "https://id.bwalletx.com". */
 export const hubOrigin = (hub: string): string => new URL(hub).origin;
 
-/** The sign-in transaction cookie's name for a state (one cookie per attempt, so two tabs don't clash). */
-export const txCookieName = (state: string): string => TX_COOKIE_PREFIX + state.slice(0, 12).replace(/[^A-Za-z0-9_-]/g, '');
+/**
+ * The sign-in transaction cookie's name for a state (one cookie per attempt, so two tabs don't clash). secure (https,
+ * the default) gives the __Host- name; plain bwx_sso_… is for http://localhost only.
+ */
+export const txCookieName = (state: string, secure = true): string =>
+  (secure ? TX_COOKIE_PREFIX_SECURE : TX_COOKIE_PREFIX) + state.slice(0, 12).replace(/[^A-Za-z0-9_-]/g, '');
 
 /** Transaction cookie value: state.verifier.base64url(returnTo). */
 export function encodeTx(t: { state: string; verifier: string; returnTo: string }): string {

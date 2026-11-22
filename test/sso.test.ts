@@ -2,21 +2,7 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { clearJwksCache, verifyHubToken } from '../src/sso/jwt';
 import { SsoError } from '../src/sso/jwt';
 import { clearEpochCache, createSso, handleSsoCallback, isFresh, memoryRevocations, requireFresh, siteCookieName, verifySiteSession, type SsoOptions } from '../src/sso/server';
-import {
-  HUB_SIGNIN_PROTOCOL,
-  b64url,
-  checkLogoutHint,
-  decodeTx,
-  encodeTx,
-  hubSignInMessage,
-  logoutHint,
-  parseHubSignInMessage,
-  pkceChallenge,
-  safeReturnTo,
-  txCookieName,
-} from '../src/sso/shared';
-import { HUB_SIGNIN_PROTOCOL as FROM_ROOT } from '../src/index';
-import { HUB_SIGNIN_PROTOCOL as FROM_SERVER, LOGIN_PROTOCOL } from '../src/server';
+import { b64url, checkLogoutHint, decodeTx, encodeTx, pkceChallenge, safeReturnTo, txCookieName } from '../src/sso/shared';
 import { readCookie } from '../src/session';
 
 const HUB = 'https://id.example';
@@ -64,8 +50,10 @@ function fakeHub(opts: { token?: () => Promise<string>; epoch?: { active: boolea
       return Response.json({ id_token: await (opts.token ?? (() => sign(claims())))() });
     }
     if (u.pathname === '/session/epoch') {
-      if (opts.epoch === 'down') throw new Error('down');
-      return Response.json(opts.epoch ?? { active: true, epoch: 0 });
+      const e = opts.epoch ?? { active: true, epoch: 0 };
+      if (e === 'down') throw new Error('down');
+      const sids = (JSON.parse(String(init?.body)) as { sids: string[] }).sids;
+      return Response.json({ sessions: sids.map((sid) => ({ sid, ...e })) });
     }
     return new Response('nope', { status: 404 });
   };
@@ -128,28 +116,7 @@ describe('shared', () => {
     expect(safeReturnTo('//evil.com', '/home')).toBe('/home');
   });
 
-  it('hub sign-in protocol: one exported constant, and the message names the hub and the challenge', () => {
-    expect(HUB_SIGNIN_PROTOCOL).toEqual([2, 'bwalletx id sign in']);
-    expect(FROM_ROOT).toBe(HUB_SIGNIN_PROTOCOL);
-    expect(FROM_SERVER).toBe(HUB_SIGNIN_PROTOCOL);
-    expect(HUB_SIGNIN_PROTOCOL[1]).not.toBe(LOGIN_PROTOCOL[1]);
-    const t = Date.UTC(2026, 10, 2, 12, 0, 0);
-    const m = hubSignInMessage('https://id.bwalletx.com/', 'n'.repeat(22), t);
-    expect(m).toBe(`Sign in to id.bwalletx.com · challenge ${'n'.repeat(22)} · 2026-11-02T12:00:00.000Z`);
-    expect(parseHubSignInMessage(m)).toEqual({ host: 'id.bwalletx.com', nonce: 'n'.repeat(22), issuedAt: t });
-    expect(parseHubSignInMessage(hubSignInMessage('http://localhost:3400', 'n'.repeat(22), t))?.host).toBe('localhost:3400');
-    for (const bad of [m + ' ', m.replace('Sign in', 'sign in'), m.replace('challenge', 'nonce'), 'Sign in to evil.com', 42]) expect(parseHubSignInMessage(bad)).toBeNull();
-  });
-
-  it('logout hint: bound to the sid, 5 minutes', async () => {
-    const t = 1_800_000_000;
-    const h = await logoutHint('sid-abcdefgh', t);
-    expect(await checkLogoutHint(h, 'sid-abcdefgh', t + 10)).toBe(true);
-    expect(await checkLogoutHint(h, 'sid-other000', t + 10)).toBe(false);
-    expect(await checkLogoutHint(h, 'sid-abcdefgh', t + 301)).toBe(false);
-    expect(await checkLogoutHint('x', 'sid-abcdefgh', t)).toBe(false);
-    expect(await checkLogoutHint(undefined, 'sid-abcdefgh', t)).toBe(false);
-  });
+  // Hub sign-in protocol and logout hints: test/sso-review2.test.ts (v2).
   it('tx cookie round trip', async () => {
     const t = { state: 'S'.repeat(43), verifier: 'v'.repeat(64), returnTo: '/x' };
     expect(decodeTx(encodeTx(t))).toEqual(t);
@@ -204,7 +171,9 @@ describe('handleSsoCallback', () => {
 
   it('http://localhost gets the plain bwx_site cookie (no __Host- without https)', async () => {
     const r = await handleSsoCallback(
-      new Request(`http://localhost:3401/sso/callback?${new URLSearchParams({ code: 'c1', state })}`, { headers: { cookie: txCookie } }),
+      new Request(`http://localhost:3401/sso/callback?${new URLSearchParams({ code: 'c1', state })}`, {
+        headers: { cookie: `${txCookieName(state, false)}=${encodeTx({ state, verifier, returnTo: '/dashboard' })}` },
+      }),
       { clientId: 'site', secret: SECRET, hub: HUB, fetch: fakeHub().f },
     );
     expect(setCookies(r).some((c) => c.startsWith('bwx_site=') && !/Secure/.test(c))).toBe(true);
@@ -352,7 +321,7 @@ describe('verifySiteSession', () => {
   });
 
   it('session route answers for the chip; logout clears the cookie and gives the hub logout URL', async () => {
-    const o: SsoOptions = { clientId: 'site', secret: SECRET, hub: HUB };
+    const o: SsoOptions = { clientId: 'site', secret: SECRET, clientSecret: 'c'.repeat(43), hub: HUB };
     const sso = createSso(o);
     const cookie = await signedIn(o);
     const s = await (await sso.session(new Request(`${SITE}/sso/session`, { headers: { cookie } }))).json();
@@ -364,7 +333,7 @@ describe('verifySiteSession', () => {
     expect(u.searchParams.get('client_id')).toBe('site');
     expect(u.searchParams.get('redirect_uri')).toBe(SITE + '/');
     // the hint proves this site holds the visitor's hub session (sid1), so the hub can sign out without a confirm page
-    expect(await checkLogoutHint(u.searchParams.get('logout_hint'), 'sid1')).toBe(true);
+    expect(await checkLogoutHint(u.searchParams.get('logout_hint'), 'sid1', { clientId: 'site', clientSecret: 'c'.repeat(43) })).toBe(true);
     expect(readCookie(out.headers.get('set-cookie'), COOKIE)).toBe('');
     // signed out already (no cookie): no hint, the hub asks to confirm
     const anon = await sso.logout(new Request(`${SITE}/sso/logout?everywhere=1`, { method: 'POST', headers: { origin: SITE } }));
