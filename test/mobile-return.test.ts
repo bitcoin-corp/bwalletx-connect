@@ -509,3 +509,12 @@ describe('the code helper', () => {
     expect(Utils.toHex([1, 2])).toBe('0102');
   });
 });
+
+describe('browser hint (CTO 22 Nov: Android browsers the wallet can return to by package)', () => {
+  it('names Opera, Chrome and Samsung on Android', async () => {
+    const { browserHint } = await import('../src/protocol');
+    expect(browserHint('Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36 OPR/85.0')).toBe('opera');
+    expect(browserHint('Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36')).toBe('chrome');
+    expect(browserHint('Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/26.0 Chrome/130.0 Mobile Safari/537.36')).toBe('samsung');
+  });
+});
