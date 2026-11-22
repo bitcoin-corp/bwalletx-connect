@@ -19,6 +19,8 @@ export interface FakePhoneOptions {
   fold?: boolean;
   /** Don't Connect on join; call phone.connect() later (the user is reading the card). */
   manual?: boolean;
+  /** createAction is recorded but never answered (the payment sheet is still up). */
+  slowActions?: boolean;
 }
 
 /**
@@ -100,6 +102,7 @@ export function fakePhone(link: string, socket: SocketFactory, root: PrivateKey,
       const seen = answers.get(m.id);
       if (seen) return ws.send(JSON.stringify(await state.sealer.seal(seen)));
       state.requests.push(m.action);
+      if (opts.slowActions && m.action === 'createAction') return;
       const result = await pw[m.action].call(pw, m.params);
       const res: PairMessage = { t: 'res', id: m.id, result };
       answers.set(m.id, res);

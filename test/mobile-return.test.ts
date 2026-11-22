@@ -5,10 +5,10 @@
  * On ONE phone the site's tab is asleep while the user is in bWalletX: iOS freezes it and its relay socket dies.
  * These tests play that out against the fake relay (which queues like the real one) and a fake phone.
  */
-import { PrivateKey, PublicKey, Signature, Utils } from '@bsv/sdk';
+import { PrivateKey, ProtoWallet, PublicKey, Signature, Utils } from '@bsv/sdk';
 import { describe, expect, it } from 'vitest';
-import { pairBwalletX, resumeReturnedPairing, type PairStorage } from '../src/pair';
-import { loginMessageFor, parsePairUrl, parseReturnFragment } from '../src/protocol';
+import { pairBwalletX, resumeReturnedPairing, type PairStorage, type PairedWallet } from '../src/pair';
+import { Sealer, deriveSession, loginMessageFor, parsePairUrl, parseReturnFragment, returnFragment } from '../src/protocol';
 import { FakeRelay, FakeSocket } from './fake-relay';
 import { fakePhone } from './phone';
 
@@ -96,10 +96,16 @@ describe('same phone: return to the site, sign-in folded into Connect', () => {
     const relay = new FakeRelay(ORIGIN);
     const ch = challenge();
     let link = '';
-    void pairBwalletX({ origin: ORIGIN, storage: null, returnStorage: mapStorage(), socket: relay.socket, returnTo: PAGE + '#old', browser: 'safari', login: ch, onCode: () => {}, onLink: (l) => (link = l) }).catch(() => {});
+    const returns = mapStorage();
+    void pairBwalletX({ origin: ORIGIN, storage: null, returnStorage: returns, socket: relay.socket, returnTo: PAGE + '&code=SECRET#old', browser: 'safari', login: ch, onCode: () => {}, onLink: (l) => (link = l) }).catch(() => {});
     await tick(5);
     const l = parsePairUrl(link);
-    expect(l.ret).toBe(PAGE);
+    // Review 22 Nov (4, 6): the wallet gets the origin's root only; the page (no query, no fragment) stays here.
+    expect(l.ret).toBe(`${ORIGIN}/`);
+    expect(link).not.toContain('SECRET');
+    expect(link).not.toContain('lounge');
+    const saved = [...returns.m.values()].map((v) => JSON.parse(v) as { page?: string });
+    expect(saved[0].page).toBe(`${ORIGIN}/rooms/lounge`);
     expect(l.rid).toMatch(/^[A-Za-z0-9_-]{22}$/);
     expect(l.b).toBe('safari');
     expect(l.ln).toBe(ch.nonce);
@@ -142,7 +148,7 @@ describe('same phone: return to the site, sign-in folded into Connect', () => {
     expect(Signature.fromDER(signature).toDER().length).toBeGreaterThan(60);
   });
 
-  it('the return tab finishes the pairing and the sign-in from the fragment alone (the relay frames were lost)', async () => {
+  it('the return tab finishes the pairing and the sign-in once the relay confirms the fragment (the first frames were lost)', async () => {
     const relay = new FakeRelay(ORIGIN);
     const root = PrivateKey.fromRandom();
     const ch = challenge();
@@ -157,7 +163,7 @@ describe('same phone: return to the site, sign-in folded into Connect', () => {
     siteSocket(relay, c)!.frozen = true; // the old tab is asleep: hello and ready are swallowed
     const phone = fakePhone(link, relay.socket, root, { fold: true });
     await tick(20);
-    expect(phone.returnTo).toMatch(/^https:\/\/example\.com\/rooms\/lounge\?x=1#bwx=ok&rid=/);
+    expect(phone.returnTo).toMatch(/^https:\/\/example\.com\/#bwx=ok&rid=/);
     const frag = parseReturnFragment(new URL(phone.returnTo!).hash)!;
     expect(frag.wk && frag.f).toBeTruthy();
 
@@ -165,7 +171,8 @@ describe('same phone: return to the site, sign-in folded into Connect', () => {
     const tabStorage = mapStorage();
     let cleaned = '';
     const r = await resumeReturnedPairing({ hash: new URL(phone.returnTo!).hash, href: phone.returnTo!, replaceUrl: (u) => (cleaned = u), returnStorage: returns, storage: tabStorage, socket: relay.socket });
-    expect(cleaned).toBe(PAGE);
+    expect(cleaned).toBe(`${ORIGIN}/`);
+    expect(r?.page).toBe(`${ORIGIN}/rooms/lounge`); // where the provider takes the user next
     expect(r?.login?.identityKey).toBe(root.toPublicKey().toString());
     expect(r?.login?.nonce).toBe(ch.nonce);
     const sig = Signature.fromDER(r!.login!.signature);
@@ -209,10 +216,112 @@ describe('same phone: return to the site, sign-in folded into Connect', () => {
     const phone = fakePhone(link, relay.socket, root, { fold: true });
     await tick(20);
     hash = new URL(phone.returnTo!).hash;
-    wake.fire(); // hashchange / pageshow
+    // Back in Safari: the frozen socket is found closed, and the hash arrives (hashchange / pageshow).
+    const old = siteSocket(relay, parsePairUrl(link).c)!;
+    old.drop();
+    old.wakeClosed();
+    wake.fire();
     const w = await p;
     expect(w.signedIn?.identityKey).toBe(root.toPublicKey().toString());
     expect(hash).toBe('');
+  });
+});
+
+describe('review 22 Nov: a forged return fragment', () => {
+  /** What someone holding the link can build: their own pairing key, their own ready, their own sign-in. */
+  const forge = async (link: string, attacker: PrivateKey) => {
+    const l = parsePairUrl(link);
+    const P = PrivateKey.fromRandom();
+    const sealer = new Sealer((await deriveSession(P, l.k, l.c)).key, 'wallet');
+    const message = loginMessageFor(l.o, l.ln!, l.lx!);
+    const { signature } = await new ProtoWallet(attacker).createSignature({ protocolID: [2, 'bwallet sign in'], keyID: l.ln!, counterparty: 'anyone', data: Array.from(new TextEncoder().encode(message)) });
+    const frame = await sealer.seal({ t: 'ready', login: { k: attacker.toPublicKey().toString(), sig: Utils.toHex(signature) } });
+    return `#${returnFragment(l.rid!, P.toPublicKey().toString(), frame)}`;
+  };
+  const challenge = () => {
+    const nonce = 'n0nce_' + Math.random().toString(36).slice(2, 12);
+    return { nonce, expiresAt: new Date(Date.now() + 120_000).toISOString() };
+  };
+
+  it('never signs in a new tab without the relay confirming that wallet', async () => {
+    const relay = new FakeRelay(ORIGIN);
+    const returns = mapStorage();
+    let link = '';
+    void pairBwalletX({ origin: ORIGIN, storage: null, returnStorage: returns, socket: relay.socket, returnTo: PAGE, login: challenge(), onCode: () => {}, onLink: (l) => (link = l) }).catch(() => {});
+    await tick(5);
+    const hash = await forge(link, PrivateKey.fromRandom());
+    const tab = mapStorage();
+    const r = await resumeReturnedPairing({ hash, href: `${ORIGIN}/${hash}`, replaceUrl: () => {}, returnStorage: returns, storage: tab, socket: relay.socket, waitMs: 300 });
+    expect(r).toBeNull();
+    expect(tab.m.size).toBe(0); // no pairing bound to the forger's key
+  });
+
+  it('a new tab with a forged fragment, then the real wallet: the real wallet wins', async () => {
+    const relay = new FakeRelay(ORIGIN);
+    const returns = mapStorage();
+    const real = PrivateKey.fromRandom();
+    const attacker = PrivateKey.fromRandom();
+    let link = '';
+    void pairBwalletX({ origin: ORIGIN, storage: null, returnStorage: returns, socket: relay.socket, returnTo: PAGE, login: challenge(), onCode: () => {}, onLink: (l) => (link = l) }).catch(() => {});
+    await tick(5);
+    siteSocket(relay, parsePairUrl(link).c)!.drop(); // the tab sleeps; the real phone's frames queue at the relay
+    fakePhone(link, relay.socket, real, { fold: true });
+    await tick(20);
+    const hash = await forge(link, attacker);
+    const r = await resumeReturnedPairing({ hash, href: `${ORIGIN}/${hash}`, replaceUrl: () => {}, returnStorage: returns, storage: mapStorage(), socket: relay.socket, waitMs: 1000 });
+    expect(r?.login?.identityKey).toBe(real.toPublicKey().toString());
+  });
+
+  it('never signs in the same tab on a forged fragment; the real wallet still can', async () => {
+    const relay = new FakeRelay(ORIGIN);
+    const wake = wakeHook();
+    const real = PrivateKey.fromRandom();
+    let link = '';
+    let hash = '';
+    let done: PairedWallet | null = null;
+    const p = pairBwalletX({ origin: ORIGIN, storage: null, returnStorage: mapStorage(), socket: relay.socket, onWake: wake.on, readHash: () => hash, replaceUrl: () => (hash = ''), returnTo: PAGE, login: challenge(), onCode: () => {}, onLink: (l) => (link = l) });
+    p.then((w) => (done = w), () => {});
+    await tick(5);
+    hash = await forge(link, PrivateKey.fromRandom());
+    wake.fire();
+    await tick(50);
+    expect(done).toBeNull();
+    fakePhone(link, relay.socket, real, { fold: true });
+    const w = await p;
+    expect(w.signedIn?.identityKey).toBe(real.toPublicKey().toString());
+  });
+});
+
+describe('review 22 Nov: spends are never re-sent', () => {
+  it('a waiting createAction is not re-sent when the wallet says ready again; a read is', async () => {
+    const relay = new FakeRelay(ORIGIN);
+    const wake = wakeHook();
+    const root = PrivateKey.fromRandom();
+    let phone: ReturnType<typeof fakePhone> | undefined;
+    const w = await pairBwalletX({
+      origin: ORIGIN,
+      storage: null,
+      socket: relay.socket,
+      onWake: wake.on,
+      callTimeoutMs: 400,
+      onCode: () => {},
+      onLink: (l) => setTimeout(() => (phone = fakePhone(l, relay.socket, root, { slowActions: true })), 0),
+    });
+    const c = [...relay.channels.keys()][0];
+    const s = siteSocket(relay, c)!;
+    s.frozen = true;
+    const spend = w.createAction({ description: 'test spend', outputs: [] } as never);
+    let spendErr: { code?: string } | null = null;
+    spend.catch((e) => (spendErr = e));
+    const read = w.getPublicKey({ identityKey: true });
+    await tick(10);
+    s.drop();
+    s.wakeClosed();
+    wake.fire();
+    await read;
+    await tick(500);
+    expect(phone!.requests.filter((a) => a === 'createAction').length).toBe(1);
+    expect(spendErr?.code).toBe('NO_ANSWER_MAYBE_SENT');
   });
 });
 
