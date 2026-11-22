@@ -5,6 +5,9 @@ export { pairBwalletX, restorePairing, clearPairing, resumeReturnedPairing, onPa
 export type { PairingOptions, PairConnectionOptions, PairStorage, PairedWallet, SocketLike, SocketFactory, FoldedSignIn, ResumeOptions, ResumedPairing } from './pair.js';
 export { signInWithBwalletX, signInAndVerify, connectBwalletX, waitIfLocked, challengeWantsIdentityKey, foldableLogin, LOGIN_PROTOCOL } from './signin.js';
 export type { Challenge, SignInAndVerifyOptions, SignInOptions, SignInResult, SignInMethod, SignInStage, SignInStatus } from './signin.js';
+// Hub sign-in v2: the wallet signs this admin-reserved protocol in its own flow and POSTs straight to the hub.
+// No web page may ask for it (BRC-100 admin-reserved names); see HUB_SIGNIN_PROTOCOL in sso/shared.
+export { HUB_SIGNIN_PROTOCOL, HUB_SIGNIN_PROTOCOL_NAME, HUB_SIGNIN_ORIGIN, HUB_WALLET_SIGNIN_PATH } from './sso/shared.js';
 export { renderButton, LOGO_URL } from './button.js';
 export type { ButtonOptions } from './button.js';
 export { inOrder } from './in-order.js';

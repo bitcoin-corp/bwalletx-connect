@@ -1,5 +1,65 @@
 # Changelog
 
+## 0.10.0 (unreleased)
+
+**Single sign-on for b*X sites.** Sign in once at id.bwalletx.com and every b*X site that uses it knows who you are.
+Sign out of one site, or of all of them at once. A sign-in proves who you are; it never lets a site spend: every
+payment still needs its own approval in bWalletX.
+
+How it works, in plain terms: the site sends you to id.bwalletx.com, which shows a short code; bWalletX shows the same
+code, you approve, and bWalletX tells the hub directly (the page never carries your wallet's answer). The hub then
+sends you back to the site with a one-time code. The site's server swaps that code for a signed note from the
+hub saying who you are, checks the note, and sets its own cookie. The browser never holds the note, and the site never
+talks to your wallet for sign-in.
+
+- **`@bwalletx/connect/sso` (browser).** `bwxSso({ clientId })` puts a **Sign in with bWalletX** button (and a small
+  **Get bWalletX** link) in `[data-bwx-sso]`, or in a fixed top-right slot. Signed in, it shows an account chip
+  (paymail, $handle or a short key) with **Sign out of this site** and **Sign out of all b*X sites**, and a short
+  "Signed in as …" message. Any page can open sign-in with `window.dispatchEvent(new Event('bwx:signin'))`; gates send
+  visitors with `?returnTo=`. On a first visit with no site session it quietly asks the hub whether you are already
+  signed in elsewhere (`prompt=none`: a full-page redirect that comes straight back, never a hidden frame), at most
+  once an hour per tab. Static sites: one script tag, `@bwalletx/connect/sso/browser` (`bwalletx-sso.global.js`),
+  then `bwxSso({ clientId })`. No `@bsv/sdk` in these entries.
+- **`@bwalletx/connect/sso/server` (site server).** `createSso({ clientId, secret, clientSecret })` gives four handlers for any
+  Request/Response runtime (Next.js route handlers, Vercel functions, Hono, Workers):
+  - `callback` (GET /sso/callback): checks the sign-in attempt's state, swaps the code for the hub's ID token (with
+    the PKCE verifier), checks the token (ES256 only, signed by a key in the hub's JWKS, from the hub, for this site,
+    not expired), sets the site's own httpOnly cookie (`__Host-bwx_site` on https), and returns to a path on this site
+    only (`safeReturnTo`).
+  - `session` (GET /sso/session): who is signed in, for the chip.
+  - `logout` (POST /sso/logout, `?everywhere=1` for all sites): clears the cookie; refuses a cross-site POST.
+  - `verify(req)`: use in your own routes. It re-checks with the hub at most every 5 minutes, so "Sign out of all b*X
+    sites" reaches this site within 5 minutes. Standard sessions last 30 days (sliding); high-tier sessions 1 hour.
+  - `requireFresh(session, seconds)` / `isFresh()`: for sensitive pages, insist the wallet sign-in at the hub is
+    recent; otherwise send the visitor back with `prompt: 'login'`.
+  - Optional `revocations` store, so "Sign out of this site" also kills copies of the cookie (`memoryRevocations()`
+    for development only).
+- **Hub sign-in v2: the wallet talks to the hub directly.** A page never hands the hub a wallet signature. The hub
+  page shows a short code (BCDF-GHJK); the wallet, which has the hub's address built in, shows the same code, signs,
+  and POSTs straight to `https://id.bwalletx.com/api/wallet-signin` over TLS. The protocol is
+  `HUB_SIGNIN_PROTOCOL` = `[2, 'admin bwalletx hub signin']`: BRC-100 reserves `admin…` names for the wallet itself,
+  so a BRC-100 wallet refuses it to any website. `hubSignInMessage({ hub, requestId, userCode, clientId, issuedAt })`
+  / `parseHubSignInMessage()` build and check the exact text; `isHubUserCode`, `HUB_WALLET_SIGNIN_PATH`,
+  `HUB_SIGNIN_ORIGIN`. (Earlier drafts of this branch used `[2, 'bwalletx id sign in']` with the page posting the
+  signature; that is gone. A wallet that pinned the old name must pin the new one.)
+- **Client authentication.** `createSso({ clientSecret })`: the code exchange and the epoch check send the site's client
+  secret as HTTP Basic auth (`clientBasicAuth`), so only that site's server can use its codes or ask about sessions.
+- **Epoch checks:** batched (checks within `epochBatchMs`, default 10 ms, go as one authenticated
+  `POST /session/epoch { sids }`), backed off on 429 (as long as Retry-After says) and on outages (5 s doubling, up to
+  2 min), and a standard session gets at most `epochGraceSeconds` (default 24 h) without a good answer. `verify()`
+  returns `hub: 'ok' | 'rate_limited' | 'unavailable'`.
+- **Security review round 2 (22 Nov 2026), also included:** a token without `auth_time` (or one in the future) is
+  refused; a malformed key in the hub's JWKS is skipped instead of leaving an unhandled rejection; the sign-in attempt
+  cookie is `__Host-bwx_sso_…` on https; site logout also needs `Sec-Fetch-Site: same-origin` when the browser sends it;
+  the `logout_hint` is an HMAC with the site's client secret (`logoutHint(sid, { clientId, clientSecret })`), so knowing
+  a sid is not enough to make one.
+- **Security review (2 Nov 2026), included:** `safeReturnTo` refuses anything that normalises to another host
+  (`/..//evil.com`, `/%2e%2e//evil.com`, backslashes); the token, JWKS and epoch fetches refuse redirects; the site
+  session keeps the hub's `auth_time`; without a valid `logout_hint` the hub asks the visitor to confirm "Sign out of
+  all".
+
+The sign-in code in the root entry is unchanged from 0.9.0 (one sheet since 0.5.5).
+
 ## 0.9.0 (22 Nov 2026)
 
 Sign in with bWalletX on a phone, on the same phone (P0, 22 Nov 2026: "it has never worked"). Three gaps, all on one
