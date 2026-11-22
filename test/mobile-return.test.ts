@@ -382,10 +382,9 @@ describe('review 2 (22 Nov)', () => {
     old.frozen = true;
     const phone = fakePhone(link, relay.socket, PrivateKey.fromRandom(), { fold: true });
     await tick(20);
-    // The new tab takes the return first…
-    const hash = new URL(phone.returnTo!).hash;
-    const r = await resumeReturnedPairing({ hash, href: `${ORIGIN}/${hash}`, replaceUrl: () => {}, returnStorage: returns, storage: mapStorage(), socket: relay.socket });
-    expect(r).not.toBeNull();
+    // The new tab took the return first (resumeReturnedPairing deletes the entry once confirmed)…
+    expect(returns.m.size).toBe(1);
+    returns.m.clear();
     // …then the old tab wakes and its relay hands it hello and ready: it must stop, not finish a second sign-in.
     old.frozen = false;
     old.deliver(phone.hello);

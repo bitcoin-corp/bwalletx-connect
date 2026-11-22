@@ -1,4 +1,5 @@
-import { ProtoWallet, PublicKey, type WalletProtocol } from '@bsv/sdk';
+import { PrivateKey, ProtoWallet, PublicKey, Utils, type WalletProtocol } from '@bsv/sdk';
+import { BROWSER_HINTS, QR_LIFETIME_S, RID_RE, pairProofText, pairProofTextV2 } from './protocol.js';
 
 /** Security level 2, a protocol name used for nothing else. Keep it constant. */
 export const LOGIN_PROTOCOL: WalletProtocol = [2, 'bwallet sign in'];
@@ -197,3 +198,65 @@ export type { LinkCallbacks, LinkResult, SignInOrLinkOptions, SignInOrLinkResult
 export * from './access.js';
 export { createAccessChallenge, verifyAccess, verifyHoldingProof, checkTokenHolding, oneSatResolver, bitSignResolver } from './access-server.js';
 export type { AccessResolver, IdentityStatus, OneSatResolverOptions, BitSignResolverOptions, CreateAccessChallengeOptions, AccessChallengeResponse, VerifyAccessOptions, AccessGrant } from './access-server.js';
+
+
+/** What the browser sends to your pair-proof route (pairingModal({ proofUrl })). */
+export interface PairProofRequest {
+  c: string;
+  k: string;
+  o: string;
+  e: number;
+  ret?: string;
+  rid?: string;
+  b?: string;
+}
+
+/**
+ * (0.9.0) Sign a pairing link for THIS origin with your site's pairing key, so bWalletX shows your host as proven and
+ * (5.2.61+) folds the sign-in into Connect. Publish the key's public half at /.well-known/bwalletx-pair.json
+ * (pairKeysDocument). Signs only: `o` equal to `origin`, a live expiry (at most the QR lifetime + 60 s ahead), and a
+ * `ret` that is exactly this origin's root. Returns null for anything else.
+ *
+ * Limits: a script outside a browser can call your route too and get a proof for its own channel, so a proof says "this
+ * site's server issued this link", not "this is the site's page". It stops other web pages (browsers set Origin
+ * honestly, and your route checks it), not a determined attacker with a server.
+ */
+export function signPairProofs(
+  r: PairProofRequest,
+  o: { origin: string; key: PrivateKey | string; nowS?: number },
+): { s: string; s2?: string } | null {
+  const nowS = o.nowS ?? Math.floor(Date.now() / 1000);
+  let key: PrivateKey;
+  try {
+    key = typeof o.key === 'string' ? (/^[0-9a-f]{64}$/i.test(o.key) ? new PrivateKey(o.key, 'hex') : PrivateKey.fromWif(o.key)) : o.key;
+  } catch {
+    return null;
+  }
+  if (!r || typeof r !== 'object') return null;
+  if (typeof r.c !== 'string' || !/^[A-Za-z0-9_-]{22}$/.test(r.c)) return null;
+  if (typeof r.k !== 'string' || !/^0[23][0-9a-f]{64}$/i.test(r.k)) return null;
+  if (r.o !== new URL(o.origin).origin) return null;
+  if (!Number.isInteger(r.e) || r.e < nowS || r.e > nowS + QR_LIFETIME_S + 60) return null;
+  const sign = (text: string) => Utils.toHex(key.sign(Utils.toArray(text, 'utf8')).toDER() as number[]);
+  const out: { s: string; s2?: string } = { s: sign(pairProofText(r)) };
+  if (r.ret !== undefined || r.rid !== undefined) {
+    if (r.ret !== `${r.o}/` || typeof r.rid !== 'string' || !RID_RE.test(r.rid)) return null;
+    if (r.b !== undefined && !(BROWSER_HINTS as readonly string[]).includes(r.b)) return null;
+    out.s2 = sign(pairProofTextV2({ ...r, ret: r.ret, rid: r.rid }));
+  }
+  return out;
+}
+
+/** The body of /.well-known/bwalletx-pair.json: up to 8 compressed public keys (the current one first). */
+export function pairKeysDocument(keys: (PrivateKey | string)[]): { keys: string[] } {
+  const out: string[] = [];
+  for (const k of keys) {
+    try {
+      const pub = typeof k === 'string' ? (/^0[23][0-9a-f]{64}$/i.test(k) ? k.toLowerCase() : PrivateKey.fromWif(k).toPublicKey().toString()) : k.toPublicKey().toString();
+      if (!out.includes(pub)) out.push(pub);
+    } catch {
+      /* skip a malformed key */
+    }
+  }
+  return { keys: out.slice(0, 8) };
+}

@@ -43,6 +43,7 @@
  *                 signed-in | error, with identity-key, paymail, handle, avatar-url and error. The element then
  *                 only emits events; it never changes its own state.
  *   href          plain link mode: navigate here on click
+ *   pair-proof-url (0.9.0) POST route that signs this origin's phone pairing links (createBwalletXAuth().pairProof)
  *   authorize-url (+ client-id, redirect-uri, scope)  OAuth mode, for auth.bwalletx.com once it exists
  *
  * Wallet choice (0.5.6): bWalletX in this browser (its own announcement, never window.CWI) → straight to its sheet,
@@ -847,7 +848,7 @@ function createClass(): CustomElementConstructor {
       const own = this.#stateful && !this.#controlled;
       const prev = this.#phase === 'signed-in' ? 'signed-in' : 'signed-out';
       const started = Date.now();
-      const pairing = pairingModal();
+      const pairing = pairingModal({ proofUrl: this.#attr('pair-proof-url') ?? undefined });
       let option: WalletOption | null = null;
       const run = ++this.#run;
       const live = () => run === this.#run;

@@ -40,6 +40,9 @@ export type PairLink = {
   b?: BrowserHint;
   ln?: string;
   lx?: string;
+  /** Origin proofs (bwalletX docs/PAIRING-ORIGIN-PROOF.md): DER signatures (hex) by a key in /.well-known/bwalletx-pair.json. */
+  s?: string;
+  s2?: string;
 };
 
 export const BROWSER_HINTS = ['safari', 'chrome', 'firefox', 'samsung', 'edge', 'brave', 'other'] as const;
@@ -102,7 +105,7 @@ export const newChannel = () => b64url(crypto.getRandomValues(new Uint8Array(16)
 
 export function pairUrl(link: PairLink): string {
   const q = new URLSearchParams({ v: link.v, r: link.r, c: link.c, k: link.k, o: link.o, e: String(link.e) });
-  for (const f of ['ret', 'rid', 'b', 'ln', 'lx'] as const) if (link[f]) q.set(f, link[f]!);
+  for (const f of ['s', 'ret', 'rid', 'b', 's2', 'ln', 'lx'] as const) if (link[f]) q.set(f, link[f]!);
   return `https://${PAIR_HOST}/pair?${q}`;
 }
 
@@ -128,6 +131,8 @@ export function parsePairUrl(text: string, nowS = Math.floor(Date.now() / 1000))
   if (RID_RE.test(g('rid'))) link.rid = g('rid');
   const b = g('b').toLowerCase();
   if ((BROWSER_HINTS as readonly string[]).includes(b)) link.b = b as BrowserHint;
+  if (/^30[0-9a-f]{10,150}$/i.test(g('s'))) link.s = g('s').toLowerCase();
+  if (/^30[0-9a-f]{10,150}$/i.test(g('s2'))) link.s2 = g('s2').toLowerCase();
   if (LOGIN_NONCE_RE.test(g('ln')) && LOGIN_EXPIRY_RE.test(g('lx'))) {
     link.ln = g('ln');
     link.lx = g('lx');
@@ -293,3 +298,9 @@ export const loginMessageFor = (origin: string, nonce: string, expiresIso: strin
     `Nonce: ${nonce}`,
     `Expires: ${expiresIso}`,
   ].join('\n');
+
+
+/** The texts a site's pairing key signs (bwalletX src/pair/protocol.ts pairProofMessage / pairProofMessageV2). */
+export const pairProofText = (l: Pick<PairLink, 'c' | 'k' | 'o' | 'e'>) => `bwallet-pair-v1|proof|${l.c}|${l.k.toLowerCase()}|${l.o}|${l.e}`;
+export const pairProofTextV2 = (l: Pick<PairLink, 'c' | 'k' | 'o' | 'e'> & { ret: string; rid: string; b?: string }) =>
+  `bwallet-pair-v2|proof|${l.c}|${l.k.toLowerCase()}|${l.o}|${l.e}|${l.ret}|${l.rid}|${l.b ?? ''}`;

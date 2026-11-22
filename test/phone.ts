@@ -103,7 +103,8 @@ export function fakePhone(link: string, socket: SocketFactory, root: PrivateKey,
       if (seen) return ws.send(JSON.stringify(await state.sealer.seal(seen)));
       state.requests.push(m.action);
       if (opts.slowActions && m.action === 'createAction') return;
-      const result = await pw[m.action].call(pw, m.params);
+      // ProtoWallet has no createAction: answer a spend with a stand-in txid.
+      const result = m.action === 'createAction' ? { txid: '00'.repeat(32) } : await pw[m.action].call(pw, m.params);
       const res: PairMessage = { t: 'res', id: m.id, result };
       answers.set(m.id, res);
       ws.send(JSON.stringify(await state.sealer.seal(res)));

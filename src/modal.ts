@@ -87,6 +87,11 @@ export interface PairingModalOptions {
   mode?: 'auto' | 'qr' | 'app';
   /** Called when the user closes the modal (the pairing is then aborted). */
   onCancel?: () => void;
+  /**
+   * (0.9.0) Your route that signs this origin's pairing links (createBwalletXAuth().pairProof, e.g.
+   * '/api/bwalletx/pair-proof'). With it, bWalletX shows your host as proven and, on a phone, signs in with one tap.
+   */
+  proofUrl?: string;
 }
 
 /**
@@ -112,6 +117,12 @@ export function pairingModal(o: PairingModalOptions = {}): PairingOptions & { cl
     signal: ac.signal,
     close,
     ...(sameDevice && here && { returnTo: here }),
+    ...(o.proofUrl && {
+      proof: async (fields: Record<string, unknown>) => {
+        const r = await fetch(o.proofUrl!, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify(fields) });
+        return r.ok ? ((await r.json()) as { s?: string; s2?: string }) : null;
+      },
+    }),
     onPaired() {
       // Connected. With an older bWalletX the sign-in is a second approval there: say so, and offer the way back.
       const p = ui?.box.querySelector('p');

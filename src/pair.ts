@@ -92,6 +92,12 @@ export interface PairingOptions extends PairConnectionOptions {
   login?: { nonce: string; expiresAt: number | string };
   /** (0.9.0) Where a return tab finds this pairing. Default: localStorage (shared by the tabs of this origin). */
   returnStorage?: PairStorage | null;
+  /**
+   * (0.9.0) Get this site's origin proofs for the link (s, and s2 when it has a return): usually a POST to your own
+   * route that calls signPairProofs (createBwalletXAuth's pairProof). With a valid s2, bWalletX 5.2.61+ shows the host
+   * as proven and signs in on the Connect card (one tap); without one it asks for the sign-in on a separate sheet.
+   */
+  proof?: (fields: { c: string; k: string; o: string; e: number; ret?: string; rid?: string; b?: string }) => Promise<{ s?: string; s2?: string } | null>;
   /** (0.9.0) Tests: the current location hash, and how to drop it from the address bar. */
   readHash?: () => string;
   replaceUrl?: (url: string) => void;
@@ -247,6 +253,32 @@ function readPending(store: PairStorage, rid: string): Promise<PendingReturn | n
 }
 const writePending = (store: PairStorage, p: PendingReturn) =>
   Promise.resolve(store.setItem(RETURN_PREFIX + p.rid, JSON.stringify(p))).catch(() => {});
+/** Taken (by this tab or another) or expired: the entry holds the site's pairing key, so it goes (review 22 Nov). */
+const dropPending = (store: PairStorage, rid: string) => Promise.resolve(store.removeItem(RETURN_PREFIX + rid)).catch(() => {});
+/** Remove return entries older than their 10 minutes (and unreadable ones). Needs a store that lists its keys. */
+export function pruneReturns(store: PairStorage | null | undefined, now = Date.now()) {
+  const s = store as (PairStorage & { key?: (i: number) => string | null; length?: number }) | null | undefined;
+  if (!s || typeof s.key !== 'function' || typeof s.length !== 'number') return;
+  const keys: string[] = [];
+  try {
+    for (let i = 0; i < s.length; i++) {
+      const k = s.key(i);
+      if (k?.startsWith(RETURN_PREFIX)) keys.push(k);
+    }
+    for (const k of keys) {
+      let ok = false;
+      try {
+        const p = JSON.parse(String(s.getItem(k))) as Partial<PendingReturn>;
+        ok = typeof p?.at === 'number' && now - p.at <= RETURN_TTL_MS && now >= p.at - 60_000 && !p.taken;
+      } catch {
+        ok = false;
+      }
+      if (!ok) s.removeItem(k);
+    }
+  } catch {
+    /* storage blocked */
+  }
+}
 
 function parseStored(raw: string | null): StoredPairing | null {
   if (!raw) return null;
@@ -308,6 +340,8 @@ type Waiting = {
   timer: ReturnType<typeof setTimeout>;
   action: string;
   params: unknown;
+  /** It reached a socket at least once. An unsent call is sent once when the link is back, spends included. */
+  sent: boolean;
 };
 
 class Link {
@@ -456,10 +490,11 @@ class Link {
       // Review 22 Nov 2026: only reads and the sign-in are asked again. A spend (or anything else that acts) is never
       // re-sent: bWalletX's record of answered ids is in memory, so after iOS kills it a re-sent createAction would
       // show a second payment sheet. It keeps waiting for its own answer, and times out as "maybe sent".
-      if (!safeToResend(w.action, w.params)) continue;
+      if (w.sent && !safeToResend(w.action, w.params)) continue;
       const ws = this.ws;
       if (!ws || ws.readyState !== OPEN) return;
       ws.send(JSON.stringify(await this.sealer.seal({ t: 'req', id, action: w.action, params: w.params })));
+      w.sent = true;
       this.persist();
     }
   }
@@ -468,8 +503,9 @@ class Link {
     const id = `${action}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     const result = new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
-        if (!this.waiting.delete(id)) return;
-        if (safeToResend(action, params)) reject(Object.assign(new Error('No answer from bWalletX. Open it, unlocked, and approve.'), { code: 'NO_ANSWER' }));
+        const w = this.waiting.get(id);
+        if (!w || !this.waiting.delete(id)) return;
+        if (!w.sent || safeToResend(action, params)) reject(Object.assign(new Error('No answer from bWalletX. Open it, unlocked, and approve.'), { code: 'NO_ANSWER' }));
         else
           reject(
             Object.assign(new Error('No answer from bWalletX. It may still have done this: check bWalletX before you try again.'), {
@@ -477,11 +513,14 @@ class Link {
             }),
           );
       }, this.timeoutMs);
-      this.waiting.set(id, { resolve, reject, timer, action, params });
+      this.waiting.set(id, { resolve, reject, timer, action, params, sent: false });
     });
     try {
       await this.ensure();
-      this.ws!.send(JSON.stringify(await this.sealer.seal({ t: 'req', id, action, params } satisfies PairMessage)));
+      const frame = JSON.stringify(await this.sealer.seal({ t: 'req', id, action, params } satisfies PairMessage));
+      this.ws!.send(frame);
+      const w = this.waiting.get(id);
+      if (w) w.sent = true;
       this.persist();
     } catch (e) {
       // Couldn't send now (the tab is going to sleep, or the relay is unreachable this second): the call waits, and
@@ -576,6 +615,7 @@ class Link {
 export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
   const storage = opts.storage === undefined ? defaultStorage() : (opts.storage ?? memoryStorage());
   const returns = opts.returnStorage === undefined ? defaultStorage() : (opts.returnStorage ?? memoryStorage());
+  pruneReturns(returns);
   const key = opts.storageKey ?? DEFAULT_KEY;
   const socket = opts.socket ?? defaultSocket();
   const relay = opts.relay ?? DEFAULT_RELAY;
@@ -605,7 +645,15 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
       (typeof navigator !== 'undefined' ? browserHintOf(navigator) : undefined)
     : undefined;
 
-  return walletClaimFor(channel, sitePub).then(claimDigest).then((wc) => new Promise<PairedWallet>((resolve, reject) => {
+  // (0.9.0) The site's origin proofs (s, s2) from its own server (signPairProofs), if it has a pairing key.
+  const proofs = (): Promise<{ s?: string; s2?: string } | null> =>
+    opts.proof
+      ? Promise.resolve(
+          opts.proof({ c: channel, k: sitePub, o: origin, e: expiry, ...(sameDevice && rid && { ret, rid, ...(b && { b }) }) }),
+        ).catch(() => null)
+      : Promise.resolve(null);
+
+  return Promise.all([walletClaimFor(channel, sitePub).then(claimDigest), proofs()]).then(([wc, proof]) => new Promise<PairedWallet>((resolve, reject) => {
     if (opts.signal?.aborted) return reject(new Error('cancelled'));
     let ws: SocketLike | null = null;
     let everOpen = false;
@@ -613,6 +661,7 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
     let walletKey = '';
     let settled = false;
     let reopenTimer: ReturnType<typeof setTimeout> | undefined;
+    let pendingSaved = false;
     const done = () => {
       settled = true;
       clearTimeout(timer);
@@ -661,11 +710,15 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
 
     const finish = async (msg: Extract<PairMessage, { t: 'ready' }>, sock: SocketLike | null) => {
       if (settled || !sealer) return;
-      done();
-      if (rid) {
+      if (rid && pendingSaved) {
+        // Review 22 Nov 2026: another tab (the wallet's return) may have finished this pairing already: then stop.
         const p = await readPending(returns, rid);
-        if (p) await writePending(returns, { ...p, taken: Date.now() });
+        if (settled) return;
+        if (!p || p.taken) return fail(Object.assign(new Error('Signed in from another tab.'), { code: 'RETURNED_IN_ANOTHER_TAB' }));
+        await dropPending(returns, rid);
       }
+      if (settled) return;
+      done();
       const p: StoredPairing = { v: 1, c: channel, r: relay, s: siteKey.toHex(), k: walletKey, ...sealer.counters, pairedAt: Date.now(), sc: siteClaim };
       await Promise.resolve(storage.setItem(key, JSON.stringify(p))).catch(() => {});
       const link = new Link(p, sealer, storage, key, socket, opts.callTimeoutMs ?? 120_000, wake);
@@ -749,8 +802,9 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
       if (settled) return;
       if (rid) {
         // Another tab (the wallet's return opened a new one) took this pairing: stop, don't fight it for the relay.
-        const p = await readPending(returns, rid);
-        if (p?.taken) return fail(Object.assign(new Error('Signed in from another tab.'), { code: 'RETURNED_IN_ANOTHER_TAB' }));
+        const p = pendingSaved ? await readPending(returns, rid) : null;
+        if (pendingSaved && (!p || p.taken))
+          return fail(Object.assign(new Error('Signed in from another tab.'), { code: 'RETURNED_IN_ANOTHER_TAB' }));
         if (await takeHash()) return;
       }
       if (settled) return;
@@ -770,8 +824,15 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
       e: expiry,
       ...(sameDevice && rid && { ret, rid, ...(b && { b }) }),
       ...(ln && lx && { ln, lx }),
+      ...(proof?.s && /^30[0-9a-f]{10,150}$/i.test(proof.s) && { s: proof.s }),
+      ...(proof?.s2 && /^30[0-9a-f]{10,150}$/i.test(proof.s2) && { s2: proof.s2 }),
     });
-    if (rid) void writePending(returns, { v: 1, c: channel, r: relay, s: siteKey.toHex(), sc: siteClaim, e: expiry, rid, ret, page, at: Date.now(), ...(ln && { ln }) });
+    if (rid)
+      void writePending(returns, { v: 1, c: channel, r: relay, s: siteKey.toHex(), sc: siteClaim, e: expiry, rid, ret, page, at: Date.now(), ...(ln && { ln }) })
+        .then(() => readPending(returns, rid))
+        .then((p) => {
+          pendingSaved = !!p; // only an entry we know was written can later say "taken" by its absence
+        });
     opts.onLink(link);
   }));
 }
@@ -814,6 +875,7 @@ export async function resumeReturnedPairing(opts: ResumeOptions = {}): Promise<R
   const href = opts.href ?? defaultHref();
   (opts.replaceUrl ?? defaultReplace)(withoutHash(href));
   const returns = opts.returnStorage === undefined ? defaultStorage() : (opts.returnStorage ?? memoryStorage());
+  pruneReturns(returns);
   const p = await readPending(returns, frag.rid);
   if (!p || p.taken || Date.now() - p.at > RETURN_TTL_MS || !RID_RE.test(p.rid)) return null;
   const storage = opts.storage === undefined ? defaultStorage() : (opts.storage ?? memoryStorage());
@@ -874,7 +936,7 @@ export async function resumeReturnedPairing(opts: ResumeOptions = {}): Promise<R
   // Taken only once confirmed, so a forged or unconfirmed fragment never stops the tab that started the pairing.
   const again = await readPending(returns, frag.rid);
   if (!again || again.taken) return null;
-  await writePending(returns, { ...p, taken: Date.now() });
+  await dropPending(returns, frag.rid); // taken: the entry (it holds the site's pairing key) goes
   const stored: StoredPairing = { v: 1, c: p.c, r: p.r, s: p.s, k: got.wk, ...got.sealer.counters, pairedAt: Date.now(), sc: p.sc };
   await Promise.resolve(storage.setItem(key, JSON.stringify(stored))).catch(() => {});
   const login = foldedFrom(got.msg.login, p.ln) ?? null;

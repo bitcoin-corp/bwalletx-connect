@@ -275,6 +275,11 @@ export interface BwalletXProviderProps {
   /** Offer phone pairing with the built-in QR modal. Default true. */
   pairing?: boolean;
   /**
+   * (0.9.0) Your route that signs this origin's phone pairing links (createBwalletXAuth().pairProof), e.g.
+   * '/api/bwalletx/pair-proof'. With it, bWalletX shows your host as proven and signs in with one tap on a phone.
+   */
+  pairProofUrl?: string;
+  /**
    * Show the built-in picker when there is a real choice. Default true. One wallet found in this browser (and no
    * app-supplied option such as HandCash) is used straight away, with no picker; phone pairing is then not offered.
    */
@@ -469,7 +474,7 @@ export function BwalletXProvider(p: BwalletXProviderProps): ReactElement {
       ms: c.discoverMs,
       probeLocal: c.probeLocal,
       extra: c.extraWallets,
-      pairing: c.pairing === false ? undefined : () => pairingModal(),
+      pairing: c.pairing === false ? undefined : () => pairingModal({ proofUrl: c.pairProofUrl }),
     });
     setWallets(list);
     return list;
