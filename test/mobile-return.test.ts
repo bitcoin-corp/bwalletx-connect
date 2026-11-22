@@ -8,7 +8,6 @@
 import { PrivateKey, ProtoWallet, PublicKey, Signature, Utils } from '@bsv/sdk';
 import { describe, expect, it } from 'vitest';
 import { pairBwalletX, resumeReturnedPairing, type PairStorage, type PairedWallet } from '../src/pair';
-import { signPairProofs } from '../src/server';
 import { Sealer, deriveSession, loginMessageFor, parsePairUrl, parseReturnFragment, returnFragment } from '../src/protocol';
 import { FakeRelay, FakeSocket } from './fake-relay';
 import { fakePhone } from './phone';
@@ -453,37 +452,18 @@ describe('review 2 (22 Nov)', () => {
     expect([...returns.m.keys()].filter((k) => k.startsWith('bwalletx.connect.return.'))).toEqual([]);
   });
 
-  it('(1) a site with a pairing key puts its proofs (s, s2) on the link', async () => {
+  it('review 3 (1): no origin-proof machinery: the link never carries s or s2, and connect has no proof route', async () => {
     const relay = new FakeRelay(ORIGIN);
-    const siteKey = PrivateKey.fromRandom();
     let link = '';
-    void pairBwalletX({
-      origin: ORIGIN,
-      storage: null,
-      returnStorage: mapStorage(),
-      socket: relay.socket,
-      returnTo: PAGE,
-      browser: 'safari',
-      login: ch(),
-      proof: async (f) => signPairProofs(f, { origin: ORIGIN, key: siteKey }),
-      onCode: () => {},
-      onLink: (l) => (link = l),
-    }).catch(() => {});
-    await tick(20);
-    const l = parsePairUrl(link);
-    const pub = siteKey.toPublicKey();
-    expect(pub.verify(Utils.toArray(`bwallet-pair-v1|proof|${l.c}|${l.k.toLowerCase()}|${l.o}|${l.e}`, 'utf8'), Signature.fromDER(Utils.toArray(l.s!, 'hex')))).toBe(true);
-    expect(pub.verify(Utils.toArray(`bwallet-pair-v2|proof|${l.c}|${l.k.toLowerCase()}|${l.o}|${l.e}|${l.ret}|${l.rid}|${l.b}`, 'utf8'), Signature.fromDER(Utils.toArray(l.s2!, 'hex')))).toBe(true);
-  });
-
-  it('(1) the server signs only its own origin, its root as ret, and a live expiry', () => {
-    const key = PrivateKey.fromRandom();
-    const base = { c: 'Q2hhbm5lbElkMTIzNDU2Nw', k: PrivateKey.fromRandom().toPublicKey().toString(), o: ORIGIN, e: Math.floor(Date.now() / 1000) + 100 };
-    expect(signPairProofs(base, { origin: ORIGIN, key })?.s).toMatch(/^30/);
-    expect(signPairProofs({ ...base, o: 'https://evil.example' }, { origin: ORIGIN, key })).toBeNull();
-    expect(signPairProofs({ ...base, e: base.e + 3600 }, { origin: ORIGIN, key })).toBeNull();
-    expect(signPairProofs({ ...base, ret: `${ORIGIN}/deep/path`, rid: 'r'.repeat(22) }, { origin: ORIGIN, key })).toBeNull();
-    expect(signPairProofs({ ...base, ret: `${ORIGIN}/`, rid: 'r'.repeat(22), b: 'safari' }, { origin: ORIGIN, key })?.s2).toMatch(/^30/);
+    void pairBwalletX({ origin: ORIGIN, storage: null, returnStorage: mapStorage(), socket: relay.socket, returnTo: PAGE, login: ch(), onCode: () => {}, onLink: (l) => (link = l) }).catch(() => {});
+    await tick(10);
+    const q = new URL(link).searchParams;
+    expect(q.has('s')).toBe(false);
+    expect(q.has('s2')).toBe(false);
+    expect(q.get('ret')).toBe(`${ORIGIN}/`);
+    const server = (await import('../src/server')) as Record<string, unknown>;
+    expect(server.signPairProofs).toBeUndefined();
+    expect(server.pairKeysDocument).toBeUndefined();
   });
 });
 
