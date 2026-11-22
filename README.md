@@ -381,7 +381,7 @@ Nonce: <nonce>
 Expires: <ISO time>
 ```
 
-It is signed with BRC-100 `createSignature`, protocol `[2, 'bwallet sign in']`, keyID = the nonce, counterparty `'anyone'`. bChat and bit-sign use the same format.
+It is signed with BRC-100 `createSignature`, protocol `[2, 'bwallet sign in']`, keyID = the nonce, counterparty `'anyone'`. bChat and bit-sign use the same format. The b*X hub (id.bwalletx.com) is the one exception: it signs in under its own `HUB_SIGNIN_PROTOCOL` (`[2, 'bwalletx id sign in']`), which bWalletX accepts from that origin only.
 
 ### Nonce store
 

@@ -7,8 +7,10 @@ export const DEFAULT_HUB = 'https://id.bwalletx.com';
 export const DEFAULT_CALLBACK_PATH = '/sso/callback';
 export const DEFAULT_SESSION_PATH = '/sso/session';
 export const DEFAULT_LOGOUT_PATH = '/sso/logout';
-/** The site's own session cookie (httpOnly, set by handleSsoCallback). */
+/** The site's own session cookie on http://localhost (httpOnly, set by handleSsoCallback). */
 export const SITE_COOKIE = 'bwx_site';
+/** The site's session cookie on https: __Host- means Secure, Path=/ and no Domain, so no subdomain can set or read it. */
+export const SITE_COOKIE_SECURE = '__Host-bwx_site';
 /** Prefix of the short-lived sign-in transaction cookie (state + PKCE verifier + returnTo), one per attempt. */
 export const TX_COOKIE_PREFIX = 'bwx_sso_';
 /** The event any page dispatches to open sign-in: window.dispatchEvent(new Event('bwx:signin')). */
@@ -18,6 +20,32 @@ export const GET_BWALLETX_URL = 'https://bwalletx.com/get';
 /** standard: content, feeds, chat (30 days, sliding). high: money, signing, shares, admin (1 hour, then re-check). */
 export type RiskTier = 'standard' | 'high';
 export const TIER_SESSION_SECONDS: Record<RiskTier, number> = { standard: 30 * 24 * 3600, high: 3600 };
+
+/**
+ * The wallet protocol the hub's sign-in signs under. Only id.bwalletx.com uses it, and bWalletX pins it to that origin
+ * (it refuses the protocol anywhere else), so a site can't relay the hub's challenge to the wallet and replay the
+ * signature at the hub. Sites keep using the shared [2, 'bwallet sign in'] for their own sign-ins.
+ */
+export const HUB_SIGNIN_PROTOCOL: [2, string] = [2, 'bwalletx id sign in'];
+export const HUB_SIGNIN_PROTOCOL_NAME = 'bwalletx id sign in';
+/** The only origin bWalletX accepts HUB_SIGNIN_PROTOCOL from. */
+export const HUB_SIGNIN_ORIGIN = DEFAULT_HUB;
+
+/** The text the wallet signs at the hub: "Sign in to id.bwalletx.com · challenge <nonce> · <ISO time>". */
+export function hubSignInMessage(hub: string, nonce: string, issuedAt: number | Date): string {
+  const iso = (typeof issuedAt === 'number' ? new Date(issuedAt) : issuedAt).toISOString();
+  return `Sign in to ${new URL(hub).host} · challenge ${nonce} · ${iso}`;
+}
+
+/** Parse a hub sign-in message: { host, nonce, issuedAt } or null if it isn't exactly in that form. */
+export function parseHubSignInMessage(m: unknown): { host: string; nonce: string; issuedAt: number } | null {
+  if (typeof m !== 'string' || m.length > 300) return null;
+  const x = /^Sign in to ([a-z0-9.-]+(?::\d{1,5})?) · challenge ([A-Za-z0-9_-]{16,64}) · (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)$/.exec(m);
+  if (!x) return null;
+  const issuedAt = Date.parse(x[3]);
+  if (!Number.isFinite(issuedAt) || new Date(issuedAt).toISOString() !== x[3]) return null;
+  return { host: x[1], nonce: x[2], issuedAt };
+}
 
 const enc = new TextEncoder();
 
@@ -54,14 +82,47 @@ export function sameString(a: string, b: string): boolean {
 }
 
 /**
- * A returnTo that stays on this site: a path starting with one "/" (not "//" or "/\", which browsers treat as another
- * host). Anything else becomes the fallback, so a crafted link can never send the visitor elsewhere.
+ * A returnTo that stays on this site: a same-origin path, query and hash. The value is parsed against a placeholder
+ * origin and must keep that origin, and its NORMALISED path may not start with "//" or "/\\" (browsers read those as
+ * another host): "/..//evil.com" normalises to "//evil.com" and is refused. Backslashes and control characters are
+ * refused anywhere. Anything else becomes the fallback, so a crafted link can never send the visitor elsewhere.
  */
 export function safeReturnTo(v: unknown, fallback = '/'): string {
   if (typeof v !== 'string' || v.length > 2048) return fallback;
-  if (!v.startsWith('/') || v.startsWith('//') || v.startsWith('/\\')) return fallback;
-  if (/[\u0000-\u001f\u007f]/.test(v)) return fallback;
-  return v;
+  if (!v.startsWith('/') || v.includes('\\') || /[\u0000-\u001f\u007f]/.test(v)) return fallback;
+  const base = 'https://x.invalid';
+  let u: URL;
+  try {
+    u = new URL(v, base);
+  } catch {
+    return fallback;
+  }
+  if (u.origin !== base || u.username || u.password) return fallback;
+  if (u.pathname.startsWith('//') || u.pathname.startsWith('/\\')) return fallback;
+  const out = u.pathname + u.search + u.hash;
+  return out.startsWith('/') && !out.startsWith('//') ? out : fallback;
+}
+
+/** "Sign out of all" from a site: proves to the hub that the request comes from a site holding this hub session (sid). */
+const LOGOUT_HINT_SECONDS = 300;
+async function logoutDigest(sid: string, t: number): Promise<string> {
+  return b64url(new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', enc.encode(`bwx-logout:${sid}:${t}`))));
+}
+/**
+ * The logout_hint a site adds to the hub's /logout link: "<t>.<base64url(SHA-256('bwx-logout:' + sid + ':' + t))>".
+ * Only the hub and the site's server know a visitor's sid, so a foreign page can't make one; it lasts 5 minutes.
+ */
+export async function logoutHint(sid: string, nowS: number = Math.floor(Date.now() / 1000)): Promise<string> {
+  return `${nowS}.${await logoutDigest(sid, nowS)}`;
+}
+/** The hub's check of a logout_hint against the session in its cookie. */
+export async function checkLogoutHint(hint: unknown, sid: string, nowS: number = Math.floor(Date.now() / 1000)): Promise<boolean> {
+  if (typeof hint !== 'string' || hint.length > 128 || !sid) return false;
+  const m = /^(\d{9,11})\.([A-Za-z0-9_-]{43})$/.exec(hint);
+  if (!m) return false;
+  const t = Number(m[1]);
+  if (t > nowS + 30 || nowS - t > LOGOUT_HINT_SECONDS) return false;
+  return sameString(m[2], await logoutDigest(sid, t));
 }
 
 /** Strip a trailing slash: "https://id.bwalletx.com/" → "https://id.bwalletx.com". */

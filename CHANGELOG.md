@@ -119,6 +119,14 @@ Wallet choice (RB, 5 Nov 2026: bWalletX is the default on our sites; no other wa
   - Server (Web Request/Response, works in Next route handlers and Vercel functions): `createSso({ clientId, secret })` gives `callback`, `session`, `logout` and `verify`. `handleSsoCallback()` checks state, exchanges the code with the PKCE verifier, verifies the token, sets your own httpOnly session cookie and returns to a same-site `returnTo` only. `verifySiteSession()` re-checks the hub's session epoch at most every 5 minutes, so "Sign out of all" reaches every site. Risk tiers: standard 30 days sliding, high 1 hour.
   - No `@bsv/sdk` in these entries: the hub talks to the wallet, the site never does. `bwalletx-sso.global.js` is 8 KB.
   - Rule zero: a session proves who you are and never authorises spending.
+  - Security review fixes (2 Nov 2026):
+    - The hub signs in under its own protocol, exported as `HUB_SIGNIN_PROTOCOL` (`[2, 'bwalletx id sign in']`, also from the root and `/server` entries) so bWalletX can pin it to id.bwalletx.com. Message: `hubSignInMessage(hub, nonce, time)` = "Sign in to id.bwalletx.com · challenge <nonce> · <ISO time>"; `parseHubSignInMessage` checks it.
+    - `safeReturnTo` parses the value against a placeholder origin and refuses anything whose normalised path starts with `//` or `/\` (so `/..//evil.com` and `/%2e%2e//evil.com` no longer pass), and any backslash; it returns path + query + hash.
+    - JWKS, `/token` and `/session/epoch` fetches use `redirect: 'error'`.
+    - The site session keeps the hub's `auth_time` as `at`; `requireFresh(session, maxAgeS)` (throws `SsoError('login_required')`) and `isFresh()` for sensitive pages. `/sso/session` returns `authTime`.
+    - "Sign out of all" from a site carries a `logout_hint` (`logoutHint(sid)`, checked by the hub with `checkLogoutHint`), so the hub signs out at once; without one the hub asks to confirm.
+    - The site cookie is `__Host-bwx_site` on https (`siteCookieName()`); `bwx_site` on http://localhost.
+    - Optional `revocations` store (`memoryRevocations()` for dev): "Sign out of this site" records the site session as revoked server-side. Without one, sign-out clears the cookie in that browser only.
 - **3 sheets → 1.** `signInWithBwalletX` fetches the challenge first (no key needed), then asks the wallet for `getPublicKey({ identityKey: true })` and `createSignature` together (Promise.all), so the user approves one sheet. Pass `identityKey` to reuse a connected identity (signature only). `createChallenge` no longer needs `identityKey`; `verifySignIn` binds the key the browser claims, and the signature only verifies for that key. `challenge` is now `(identityKey?: string) => …`; servers older than 0.6 can keep the old order with `challengeNeedsIdentityKey: true`.
 
 ## 0.5.4 (unreleased)

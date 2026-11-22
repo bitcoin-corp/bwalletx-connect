@@ -1,7 +1,11 @@
 import { ProtoWallet, PublicKey, type WalletProtocol } from '@bsv/sdk';
 
-/** Security level 2, a protocol name used for nothing else. Keep it constant. */
+/**
+ * Security level 2, a protocol name used for nothing else. Keep it constant. The b*X hub (id.bwalletx.com) signs in
+ * under its own HUB_SIGNIN_PROTOCOL instead, which bWalletX pins to that origin.
+ */
 export const LOGIN_PROTOCOL: WalletProtocol = [2, 'bwallet sign in'];
+export { HUB_SIGNIN_PROTOCOL, HUB_SIGNIN_PROTOCOL_NAME, HUB_SIGNIN_ORIGIN } from './sso/shared.js';
 export const CHALLENGE_LIFETIME_MS = 2 * 60 * 1000;
 
 export interface PendingChallenge {

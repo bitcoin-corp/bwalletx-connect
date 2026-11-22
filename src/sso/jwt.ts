@@ -57,7 +57,8 @@ export function clearJwksCache(): void {
 }
 
 async function loadJwks(hub: string, f: FetchLike): Promise<Map<string, Promise<CryptoKey>>> {
-  const r = await f(`${hub}/.well-known/jwks.json`, { headers: { accept: 'application/json' } });
+  // redirect: 'error': the keys come from the hub itself, never from wherever a redirect points.
+  const r = await f(`${hub}/.well-known/jwks.json`, { headers: { accept: 'application/json' }, redirect: 'error' });
   if (!r.ok) throw new SsoError('jwks_unavailable', `The sign-in hub's keys could not be read (${r.status})`);
   const body = (await r.json()) as { keys?: HubJwk[] };
   const keys = new Map<string, Promise<CryptoKey>>();

@@ -34,6 +34,8 @@ export interface SsoSessionInfo {
   iat?: number;
   exp?: number;
   started?: number;
+  /** When the wallet sign-in at the hub happened (seconds). */
+  authTime?: number | null;
 }
 
 export interface BwxSsoOptions {
@@ -120,7 +122,10 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: s
 const shortKey = (k: string) => `${k.slice(0, 6)}…${k.slice(-4)}`;
 const displayName = (s: SsoSessionInfo) => s.paymail || (s.handle ? s.handle : s.identityKey ? shortKey(s.identityKey) : 'Signed in');
 
-/** returnTo for a sign-in: ?returnTo= on this page (gates send visitors with it), else the default, else this page. */
+/**
+ * returnTo for a sign-in: ?returnTo= on this page (gates send visitors with it), else the default, else this page.
+ * Every source goes through safeReturnTo, so a crafted ?returnTo= can only ever name a path on this site.
+ */
 function currentReturnTo(fallback?: string): string {
   const q = new URLSearchParams(location.search).get('returnTo');
   if (q) return safeReturnTo(q, '/');

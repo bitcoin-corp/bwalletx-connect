@@ -62,4 +62,23 @@ describe('bwxSso', () => {
     expect(await pkceChallenge(tx.verifier)).toBe(u.searchParams.get('code_challenge'));
     s.destroy();
   });
+
+  it('a crafted ?returnTo= that normalises to another host becomes "/" (open redirect)', async () => {
+    for (const rt of ['/..//evil.com', '/%2e%2e//evil.com', '//evil.com', 'https://evil.com', '/\\evil.com']) {
+      history.replaceState(null, '', `/gate?returnTo=${encodeURIComponent(rt)}`);
+      document.cookie.split('; ').filter((c) => c.startsWith('bwx_sso_')).forEach((c) => (document.cookie = `${c.split('=')[0]}=; Max-Age=0; Path=/`));
+      mockSession({ signedIn: false });
+      const assign = vi.fn();
+      vi.spyOn(window, 'location', 'get').mockReturnValue({ ...window.location, assign, origin: window.location.origin, search: window.location.search, href: window.location.href, protocol: 'http:' } as Location);
+      const s = bwxSso({ clientId: 'site', hub: 'https://id.example', silent: false });
+      await tick(5);
+      window.dispatchEvent(new Event('bwx:signin'));
+      await tick(20);
+      const state = new URL(assign.mock.calls[0][0]).searchParams.get('state')!;
+      const raw = document.cookie.split('; ').find((c) => c.startsWith('bwx_sso_') && decodeTx(c.slice(c.indexOf('=') + 1))?.state === state)!;
+      expect(decodeTx(raw.slice(raw.indexOf('=') + 1))!.returnTo, rt).toBe('/');
+      s.destroy();
+      vi.restoreAllMocks();
+    }
+  });
 });

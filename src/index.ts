@@ -5,6 +5,8 @@ export { pairBwalletX, restorePairing, clearPairing, resumeReturnedPairing, onPa
 export type { PairingOptions, PairConnectionOptions, PairStorage, PairedWallet, SocketLike, SocketFactory, FoldedSignIn, ResumeOptions, ResumedPairing } from './pair.js';
 export { signInWithBwalletX, signInAndVerify, connectBwalletX, waitIfLocked, challengeWantsIdentityKey, foldableLogin, LOGIN_PROTOCOL } from './signin.js';
 export type { Challenge, SignInAndVerifyOptions, SignInOptions, SignInResult, SignInMethod, SignInStage, SignInStatus } from './signin.js';
+// The hub's own sign-in protocol (id.bwalletx.com only; bWalletX pins it to that origin).
+export { HUB_SIGNIN_PROTOCOL, HUB_SIGNIN_PROTOCOL_NAME, HUB_SIGNIN_ORIGIN } from './sso/shared.js';
 export { renderButton, LOGO_URL } from './button.js';
 export type { ButtonOptions } from './button.js';
 export { inOrder } from './in-order.js';

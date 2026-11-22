@@ -1,13 +1,30 @@
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { clearJwksCache, verifyHubToken } from '../src/sso/jwt';
-import { clearEpochCache, createSso, handleSsoCallback, verifySiteSession, type SsoOptions } from '../src/sso/server';
-import { b64url, decodeTx, encodeTx, pkceChallenge, safeReturnTo, txCookieName } from '../src/sso/shared';
+import { SsoError } from '../src/sso/jwt';
+import { clearEpochCache, createSso, handleSsoCallback, isFresh, memoryRevocations, requireFresh, siteCookieName, verifySiteSession, type SsoOptions } from '../src/sso/server';
+import {
+  HUB_SIGNIN_PROTOCOL,
+  b64url,
+  checkLogoutHint,
+  decodeTx,
+  encodeTx,
+  hubSignInMessage,
+  logoutHint,
+  parseHubSignInMessage,
+  pkceChallenge,
+  safeReturnTo,
+  txCookieName,
+} from '../src/sso/shared';
+import { HUB_SIGNIN_PROTOCOL as FROM_ROOT } from '../src/index';
+import { HUB_SIGNIN_PROTOCOL as FROM_SERVER, LOGIN_PROTOCOL } from '../src/server';
 import { readCookie } from '../src/session';
 
 const HUB = 'https://id.example';
 const SITE = 'https://site.example';
 const KEY = '02' + 'ab'.repeat(32);
 const SECRET = 'x'.repeat(40);
+/** https sites get the __Host- cookie. */
+const COOKIE = '__Host-bwx_site';
 const enc = new TextEncoder();
 
 let kp: CryptoKeyPair;
@@ -36,8 +53,10 @@ const claims = (over: Record<string, unknown> = {}) => ({
 /** A fake hub: JWKS, /token and /session/epoch. */
 function fakeHub(opts: { token?: () => Promise<string>; epoch?: { active: boolean; epoch: number } | 'down'; onToken?: (b: URLSearchParams) => void } = {}) {
   const calls: string[] = [];
+  const redirects: (RequestRedirect | undefined)[] = [];
   const f = async (url: string, init?: RequestInit) => {
     calls.push(url);
+    redirects.push(init?.redirect);
     const u = new URL(url);
     if (u.pathname === '/.well-known/jwks.json') return Response.json({ keys: [{ ...jwk, kid: 'k1', alg: 'ES256', use: 'sig' }] });
     if (u.pathname === '/token') {
@@ -50,7 +69,7 @@ function fakeHub(opts: { token?: () => Promise<string>; epoch?: { active: boolea
     }
     return new Response('nope', { status: 404 });
   };
-  return { f, calls };
+  return { f, calls, redirects };
 }
 
 describe('verifyHubToken', () => {
@@ -80,7 +99,56 @@ describe('verifyHubToken', () => {
 describe('shared', () => {
   it('safeReturnTo keeps visitors on the site', () => {
     expect(safeReturnTo('/dash?x=1')).toBe('/dash?x=1');
-    for (const bad of ['//evil.com', '/\\evil.com', 'https://evil.com', 'javascript:alert(1)', '', '/a\nb']) expect(safeReturnTo(bad)).toBe('/');
+    expect(safeReturnTo('/vault/item?id=7&tab=a#notes')).toBe('/vault/item?id=7&tab=a#notes');
+    expect(safeReturnTo('/#top')).toBe('/#top');
+    expect(safeReturnTo('/a/../b?q=1')).toBe('/b?q=1');
+    for (const bad of [
+      '/..//evil.com',
+      '/.//evil.com',
+      '/%2e%2e//evil.com',
+      '/%2E%2E//evil.com',
+      '/a/../..//evil.com',
+      '/\\evil.com',
+      '/x\\y',
+      'https://evil.com',
+      '//evil.com',
+      '///evil.com',
+      'javascript:alert(1)',
+      'JavaScript:alert(1)',
+      '',
+      'dash',
+      '/a\nb',
+      '/a\tb',
+      '/' + 'a'.repeat(2048),
+      42,
+      null,
+    ]) {
+      expect(safeReturnTo(bad), String(bad)).toBe('/');
+    }
+    expect(safeReturnTo('//evil.com', '/home')).toBe('/home');
+  });
+
+  it('hub sign-in protocol: one exported constant, and the message names the hub and the challenge', () => {
+    expect(HUB_SIGNIN_PROTOCOL).toEqual([2, 'bwalletx id sign in']);
+    expect(FROM_ROOT).toBe(HUB_SIGNIN_PROTOCOL);
+    expect(FROM_SERVER).toBe(HUB_SIGNIN_PROTOCOL);
+    expect(HUB_SIGNIN_PROTOCOL[1]).not.toBe(LOGIN_PROTOCOL[1]);
+    const t = Date.UTC(2026, 10, 2, 12, 0, 0);
+    const m = hubSignInMessage('https://id.bwalletx.com/', 'n'.repeat(22), t);
+    expect(m).toBe(`Sign in to id.bwalletx.com · challenge ${'n'.repeat(22)} · 2026-11-02T12:00:00.000Z`);
+    expect(parseHubSignInMessage(m)).toEqual({ host: 'id.bwalletx.com', nonce: 'n'.repeat(22), issuedAt: t });
+    expect(parseHubSignInMessage(hubSignInMessage('http://localhost:3400', 'n'.repeat(22), t))?.host).toBe('localhost:3400');
+    for (const bad of [m + ' ', m.replace('Sign in', 'sign in'), m.replace('challenge', 'nonce'), 'Sign in to evil.com', 42]) expect(parseHubSignInMessage(bad)).toBeNull();
+  });
+
+  it('logout hint: bound to the sid, 5 minutes', async () => {
+    const t = 1_800_000_000;
+    const h = await logoutHint('sid-abcdefgh', t);
+    expect(await checkLogoutHint(h, 'sid-abcdefgh', t + 10)).toBe(true);
+    expect(await checkLogoutHint(h, 'sid-other000', t + 10)).toBe(false);
+    expect(await checkLogoutHint(h, 'sid-abcdefgh', t + 301)).toBe(false);
+    expect(await checkLogoutHint('x', 'sid-abcdefgh', t)).toBe(false);
+    expect(await checkLogoutHint(undefined, 'sid-abcdefgh', t)).toBe(false);
   });
   it('tx cookie round trip', async () => {
     const t = { state: 'S'.repeat(43), verifier: 'v'.repeat(64), returnTo: '/x' };
@@ -108,11 +176,40 @@ describe('handleSsoCallback', () => {
     expect(r.headers.get('location')).toBe('/dashboard');
     expect(sent!.get('code_verifier')).toBe(verifier);
     expect(sent!.get('redirect_uri')).toBe(`${SITE}/sso/callback`);
-    const site = setCookies(r).find((c) => c.startsWith('bwx_site='))!;
+    const site = setCookies(r).find((c) => c.startsWith(COOKIE + '='))!;
     expect(site).toMatch(/HttpOnly/);
     expect(site).toMatch(/Secure/);
     expect(site).toMatch(/SameSite=Lax/);
+    expect(site).toMatch(/Path=\//);
+    expect(site).not.toMatch(/Domain=/i);
     expect(setCookies(r).some((c) => c.startsWith(txCookieName(state) + '=;'))).toBe(true);
+  });
+
+  it('every hub fetch refuses redirects (JWKS, /token)', async () => {
+    const hub = fakeHub();
+    await handleSsoCallback(callbackReq({ code: 'c1', state, iss: HUB }, txCookie), { clientId: 'site', secret: SECRET, hub: HUB, fetch: hub.f });
+    expect(hub.calls.map((u) => new URL(u).pathname)).toEqual(['/token', '/.well-known/jwks.json']);
+    expect(hub.redirects).toEqual(['error', 'error']);
+  });
+
+  it('a returnTo that normalises to another host never leaves the site, even on an error', async () => {
+    for (const rt of ['/..//evil.com', '/%2e%2e//evil.com', '/.//evil.com']) {
+      const tx = `${txCookieName(state)}=${encodeTx({ state, verifier, returnTo: rt })}`;
+      const ok = await handleSsoCallback(callbackReq({ code: 'c1', state, iss: HUB }, tx), { clientId: 'site', secret: SECRET, hub: HUB, fetch: fakeHub().f });
+      expect(ok.headers.get('location')).toBe('/');
+      const bad = await handleSsoCallback(callbackReq({ error: 'access_denied', state, iss: HUB }, tx), { clientId: 'site', secret: SECRET, hub: HUB, fetch: fakeHub().f });
+      expect(bad.headers.get('location')).toBe('/?sso_error=access_denied');
+    }
+  });
+
+  it('http://localhost gets the plain bwx_site cookie (no __Host- without https)', async () => {
+    const r = await handleSsoCallback(
+      new Request(`http://localhost:3401/sso/callback?${new URLSearchParams({ code: 'c1', state })}`, { headers: { cookie: txCookie } }),
+      { clientId: 'site', secret: SECRET, hub: HUB, fetch: fakeHub().f },
+    );
+    expect(setCookies(r).some((c) => c.startsWith('bwx_site=') && !/Secure/.test(c))).toBe(true);
+    expect(siteCookieName({}, new Request('http://localhost:3401/'))).toBe('bwx_site');
+    expect(siteCookieName({}, new Request('https://site.example/'))).toBe(COOKIE);
   });
 
   it('refuses a state that does not match this attempt', async () => {
@@ -120,14 +217,14 @@ describe('handleSsoCallback', () => {
     const r = await handleSsoCallback(callbackReq({ code: 'c1', state: 'zz'.repeat(22) }, txCookie), { clientId: 'site', secret: SECRET, hub: HUB, fetch: f });
     expect(r.headers.get('location')).toBe('/?sso_error=state');
     expect(calls).toEqual([]);
-    expect(setCookies(r).some((c) => c.startsWith('bwx_site='))).toBe(false);
+    expect(setCookies(r).some((c) => c.startsWith(COOKIE + '='))).toBe(false);
   });
 
   it('refuses a hub token for another site', async () => {
     const { f } = fakeHub({ token: () => sign(claims({ aud: 'other' })) });
     const r = await handleSsoCallback(callbackReq({ code: 'c1', state }, txCookie), { clientId: 'site', secret: SECRET, hub: HUB, fetch: f });
     expect(r.headers.get('location')).toBe('/dashboard?sso_error=bad_aud');
-    expect(setCookies(r).some((c) => c.startsWith('bwx_site='))).toBe(false);
+    expect(setCookies(r).some((c) => c.startsWith(COOKIE + '='))).toBe(false);
   });
 
   it('login_required (quiet check, no hub session) goes back signed out with no error', async () => {
@@ -140,7 +237,7 @@ describe('handleSsoCallback', () => {
     const { f } = fakeHub();
     const o: SsoOptions = { clientId: 'site', secret: SECRET, hub: HUB, fetch: f, onSignedIn: () => ({ uid: 'u1' }) };
     const r = await handleSsoCallback(callbackReq({ code: 'c', state }, txCookie), o);
-    const cookie = setCookies(r).find((c) => c.startsWith('bwx_site='))!.split(';')[0];
+    const cookie = setCookies(r).find((c) => c.startsWith(COOKIE + '='))!.split(';')[0];
     const { session } = await verifySiteSession(new Request(SITE, { headers: { cookie } }), o);
     expect(session?.uid).toBe('u1');
     const r2 = await handleSsoCallback(callbackReq({ code: 'c', state }, txCookie), { ...o, onSignedIn: () => false });
@@ -154,8 +251,61 @@ describe('verifySiteSession', () => {
   async function signedIn(o: SsoOptions, tier: 'standard' | 'high' = 'standard') {
     const { f } = fakeHub({ token: () => sign(claims({ tier })) });
     const r = await handleSsoCallback(callbackReq({ code: 'c', state }, txCookie), { ...o, fetch: f });
-    return setCookies(r).find((c) => c.startsWith('bwx_site='))!.split(';')[0];
+    return setCookies(r).find((c) => c.startsWith(COOKIE + '='))!.split(';')[0];
   }
+
+  it('keeps auth_time as `at`; requireFresh refuses a stale wallet sign-in', async () => {
+    let t = Date.now();
+    const o: SsoOptions = { clientId: 'site', secret: SECRET, hub: HUB, now: () => t };
+    const authTime = Math.floor(t / 1000) - 120; // the wallet sign-in was 2 minutes ago
+    const { f } = fakeHub({ token: () => sign(claims({ auth_time: authTime })) });
+    const r = await handleSsoCallback(callbackReq({ code: 'c', state }, txCookie), { ...o, fetch: f });
+    const cookie = setCookies(r).find((c) => c.startsWith(COOKIE + '='))!.split(';')[0];
+    const { session } = await verifySiteSession(new Request(SITE, { headers: { cookie } }), o);
+    expect(session?.at).toBe(authTime);
+    expect(requireFresh(session, 300, t)).toBe(session);
+    expect(isFresh(session, 300, t)).toBe(true);
+    expect(isFresh(session, 60, t)).toBe(false);
+    expect(() => requireFresh(session, 60, t)).toThrow(SsoError);
+    try {
+      requireFresh(session, 60, t);
+    } catch (e) {
+      expect((e as SsoError).code).toBe('login_required');
+    }
+    expect(() => requireFresh(null, 300, t)).toThrow(/Not signed in/);
+    expect(isFresh({}, 300, t)).toBe(false);
+    t += 10 * 60_000;
+    expect(isFresh(session, 300, t)).toBe(false);
+    const chip = await (await createSso(o).session(new Request(`${SITE}/sso/session`, { headers: { cookie } }))).json();
+    expect(chip.authTime).toBe(authTime);
+  });
+
+  it('the epoch check refuses redirects', async () => {
+    let t = Date.now();
+    const o: SsoOptions = { clientId: 'site', secret: SECRET, hub: HUB, now: () => t };
+    const cookie = await signedIn(o);
+    t += 301_000;
+    const hub = fakeHub();
+    await verifySiteSession(new Request(SITE, { headers: { cookie } }), { ...o, fetch: hub.f });
+    expect(hub.calls.map((u) => new URL(u).pathname)).toEqual(['/session/epoch']);
+    expect(hub.redirects).toEqual(['error']);
+  });
+
+  it('sign out of this site: a revocation store refuses the old cookie afterwards', async () => {
+    const revocations = memoryRevocations();
+    const o: SsoOptions = { clientId: 'site', secret: SECRET, hub: HUB, revocations };
+    const cookie = await signedIn(o);
+    const req = () => new Request(SITE, { headers: { cookie } });
+    expect((await verifySiteSession(req(), o)).session).not.toBeNull();
+    const out = await createSso(o).logout(new Request(`${SITE}/sso/logout`, { method: 'POST', headers: { cookie, origin: SITE } }));
+    expect(await out.json()).toEqual({ ok: true, redirect: null });
+    // a copy of the cookie taken before signing out no longer works
+    const after = await verifySiteSession(req(), o);
+    expect(after.session).toBeNull();
+    expect(after.setCookie[0]).toMatch(/^__Host-bwx_site=;/);
+    // without a store the cookie is only cleared in this browser (documented)
+    expect((await verifySiteSession(req(), { ...o, revocations: undefined })).session).not.toBeNull();
+  });
 
   it('a bumped hub epoch signs this site out', async () => {
     let t = Date.now();
@@ -166,7 +316,7 @@ describe('verifySiteSession', () => {
     t += 301_000; // past the 5 minute epoch cache
     const out = await verifySiteSession(new Request(SITE, { headers: { cookie } }), { ...o, fetch: fakeHub({ epoch: { active: true, epoch: 1 } }).f });
     expect(out.session).toBeNull();
-    expect(out.setCookie[0]).toMatch(/^bwx_site=;.*Max-Age=0/);
+    expect(out.setCookie[0]).toMatch(/^__Host-bwx_site=;.*Max-Age=0/);
   });
 
   it('checks the hub at most every 5 minutes', async () => {
@@ -208,8 +358,17 @@ describe('verifySiteSession', () => {
     const s = await (await sso.session(new Request(`${SITE}/sso/session`, { headers: { cookie } }))).json();
     expect(s).toMatchObject({ signedIn: true, identityKey: KEY, paymail: 'alice@bwalletx.com', tier: 'standard' });
     const out = await sso.logout(new Request(`${SITE}/sso/logout?everywhere=1`, { method: 'POST', headers: { cookie, origin: SITE } }));
-    expect(await out.json()).toEqual({ ok: true, redirect: `${HUB}/logout?client_id=site&redirect_uri=${encodeURIComponent(SITE + '/')}` });
-    expect(readCookie(out.headers.get('set-cookie'), 'bwx_site')).toBe('');
+    const { redirect } = (await out.json()) as { redirect: string };
+    const u = new URL(redirect);
+    expect(u.origin + u.pathname).toBe(`${HUB}/logout`);
+    expect(u.searchParams.get('client_id')).toBe('site');
+    expect(u.searchParams.get('redirect_uri')).toBe(SITE + '/');
+    // the hint proves this site holds the visitor's hub session (sid1), so the hub can sign out without a confirm page
+    expect(await checkLogoutHint(u.searchParams.get('logout_hint'), 'sid1')).toBe(true);
+    expect(readCookie(out.headers.get('set-cookie'), COOKIE)).toBe('');
+    // signed out already (no cookie): no hint, the hub asks to confirm
+    const anon = await sso.logout(new Request(`${SITE}/sso/logout?everywhere=1`, { method: 'POST', headers: { origin: SITE } }));
+    expect(new URL(((await anon.json()) as { redirect: string }).redirect).searchParams.get('logout_hint')).toBeNull();
     const csrf = await sso.logout(new Request(`${SITE}/sso/logout`, { method: 'POST', headers: { cookie, origin: 'https://evil.example' } }));
     expect(csrf.status).toBe(403);
   });

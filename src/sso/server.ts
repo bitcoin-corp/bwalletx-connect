@@ -18,9 +18,12 @@ import {
   DEFAULT_CALLBACK_PATH,
   DEFAULT_HUB,
   SITE_COOKIE,
+  SITE_COOKIE_SECURE,
   TIER_SESSION_SECONDS,
   decodeTx,
   hubOrigin,
+  logoutHint,
+  randomToken,
   safeReturnTo,
   sameString,
   txCookieName,
@@ -51,6 +54,10 @@ export interface SiteSessionClaims {
   chk: number;
   /** When this session first started (sliding refreshes keep it), seconds. */
   st: number;
+  /** When the visitor last proved the wallet at the hub (the ID token's auth_time), seconds. See requireFresh. */
+  at?: number;
+  /** This site session's own id (for revocation on "Sign out of this site"). */
+  sj?: string;
   /** Anything onSignedIn added. */
   [claim: string]: unknown;
 }
@@ -71,7 +78,7 @@ export interface SsoOptions {
    * accepts requests on these origins. Default: the request's own origin (the hub still checks the redirect URI exactly).
    */
   origins?: string[];
-  /** Cookie name. Default bwx_site. */
+  /** Cookie name. Default __Host-bwx_site on https, bwx_site on http://localhost. */
   cookieName?: string;
   /** Default: true unless the site runs on http://localhost. */
   secureCookie?: boolean;
@@ -82,9 +89,37 @@ export interface SsoOptions {
    * Return extra claims (uid…) to store, or false to refuse the sign-in.
    */
   onSignedIn?: (claims: HubClaims, req: Request) => Promise<Record<string, unknown> | void | false> | Record<string, unknown> | void | false;
+  /**
+   * Optional server-side record of site sessions signed out with "Sign out of this site". Without one, site sessions
+   * are stateless signed cookies: signing out clears the cookie in this browser, but a copy of that cookie taken
+   * earlier stays valid until it expires (30 days standard, 1 hour high) or the hub session ends ("Sign out of all").
+   */
+  revocations?: SiteRevocationStore;
   fetch?: FetchLike;
   /** ms since the epoch, for tests. */
   now?: () => number;
+}
+
+/** Where revoked site session ids are kept until they would have expired anyway. take/put must be shared between instances. */
+export interface SiteRevocationStore {
+  revoke(id: string, untilS: number): Promise<void> | void;
+  isRevoked(id: string): Promise<boolean> | boolean;
+}
+
+/** In-memory revocations: development and tests only (not shared between instances, lost on restart). */
+export function memoryRevocations(now: () => number = Date.now): SiteRevocationStore {
+  const m = new Map<string, number>();
+  return {
+    revoke(id, untilS) {
+      const t = Math.floor(now() / 1000);
+      for (const [k, v] of m) if (v < t) m.delete(k);
+      m.set(id, untilS);
+    },
+    isRevoked(id) {
+      const u = m.get(id);
+      return u !== undefined && u >= Math.floor(now() / 1000);
+    },
+  };
 }
 
 export interface VerifyResult {
@@ -96,6 +131,13 @@ export interface VerifyResult {
 const nowS = (o: SsoOptions) => Math.floor((o.now?.() ?? Date.now()) / 1000);
 const isLocalhost = (u: URL) => u.hostname === 'localhost';
 const secureFor = (o: SsoOptions, req: Request) => o.secureCookie ?? !isLocalhost(new URL(req.url));
+
+/** The site cookie's name for this request: __Host-bwx_site on https, bwx_site on http://localhost (or your cookieName). */
+export function siteCookieName(o: Pick<SsoOptions, 'cookieName' | 'secureCookie'>, req?: Request): string {
+  if (o.cookieName) return o.cookieName;
+  const secure = o.secureCookie ?? (req ? !isLocalhost(new URL(req.url)) : true);
+  return secure ? SITE_COOKIE_SECURE : SITE_COOKIE;
+}
 
 // Hub epoch answers shared by requests in this process, keyed by hub + sid.
 const epochCache = new Map<string, { at: number; active: boolean; epoch: number | null }>();
@@ -120,9 +162,9 @@ function redirect(location: string, cookies: string[] = []): Response {
 }
 
 function withQuery(path: string, k: string, v: string): string {
-  const u = new URL(path, 'http://x');
+  const u = new URL(safeReturnTo(path), 'https://x.invalid');
   u.searchParams.set(k, v);
-  return u.pathname + u.search + u.hash;
+  return safeReturnTo(u.pathname + u.search + u.hash);
 }
 
 /** Make the site cookie for a session (also used for sliding refreshes). */
@@ -131,13 +173,13 @@ async function sessionCookie(o: SsoOptions, req: Request, s: SiteSessionClaims):
   // A high-tier session never slides past 1 h from its start; a standard one runs 30 days from the last refresh.
   const remaining = s.tier === 'high' ? Math.max(1, s.st + maxAge - nowS(o)) : maxAge;
   const token = await signSession(s, { secret: o.secret, maxAge: remaining, now: o.now?.() });
-  return serializeCookie(token, { name: o.cookieName ?? SITE_COOKIE, maxAge: remaining, secure: secureFor(o, req), sameSite: 'Lax', path: '/' });
+  return serializeCookie(token, { name: siteCookieName(o, req), maxAge: remaining, secure: secureFor(o, req), sameSite: 'Lax', path: '/' });
 }
 
 /** A Set-Cookie value that deletes the site session. */
 export function clearSiteCookie(o: Pick<SsoOptions, 'cookieName' | 'secureCookie'>, req?: Request): string {
   const secure = o.secureCookie ?? (req ? !isLocalhost(new URL(req.url)) : true);
-  return serializeCookie('', { name: o.cookieName ?? SITE_COOKIE, maxAge: 0, secure, sameSite: 'Lax', path: '/' });
+  return serializeCookie('', { name: siteCookieName(o, req), maxAge: 0, secure, sameSite: 'Lax', path: '/' });
 }
 
 /**
@@ -153,7 +195,7 @@ export async function handleSsoCallback(req: Request, o: SsoOptions): Promise<Re
   const name = state ? txCookieName(state) : '';
   const tx = name ? decodeTx(readCookie(req.headers.get('cookie'), name)) : null;
   const clear = name ? [txClear(name, secure)] : [];
-  const back = tx?.returnTo ?? '/';
+  const back = safeReturnTo(tx?.returnTo, '/');
   const fail = (code: string) => redirect(withQuery(back, 'sso_error', code), clear);
 
   const origin = siteOrigin(o, req);
@@ -172,6 +214,7 @@ export async function handleSsoCallback(req: Request, o: SsoOptions): Promise<Re
   try {
     const r = await (o.fetch ?? fetch)(`${hub}/token`, {
       method: 'POST',
+      redirect: 'error', // the code and verifier go to the hub only, never to wherever a redirect points
       headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
       body: new URLSearchParams({
         grant_type: 'authorization_code',
@@ -208,6 +251,8 @@ export async function handleSsoCallback(req: Request, o: SsoOptions): Promise<Re
     ...(claims.handle ? { handle: claims.handle } : {}),
     chk: t,
     st: t,
+    at: typeof claims.auth_time === 'number' ? claims.auth_time : t,
+    sj: randomToken(12),
   });
   return redirect(back, [...clear, cookie]);
 }
@@ -221,6 +266,7 @@ async function hubEpoch(o: SsoOptions, sid: string): Promise<{ active: boolean; 
   try {
     const r = await (o.fetch ?? fetch)(`${hub}/session/epoch?sid=${encodeURIComponent(sid)}`, {
       headers: { accept: 'application/json' },
+      redirect: 'error',
       signal: AbortSignal.timeout(3000),
     });
     if (!r.ok) return null;
@@ -241,11 +287,12 @@ async function hubEpoch(o: SsoOptions, sid: string): Promise<{ active: boolean; 
  * re-checked next time; a high-tier session is refused until the hub answers.
  */
 export async function verifySiteSession(req: Request, o: SsoOptions): Promise<VerifyResult> {
-  const raw = readCookie(req.headers.get('cookie'), o.cookieName ?? SITE_COOKIE);
+  const raw = readCookie(req.headers.get('cookie'), siteCookieName(o, req));
   if (!raw) return { session: null, setCookie: [] };
   const s = (await verifySession(raw, { secret: o.secret, now: o.now?.() })) as SiteSession | null;
   const dead = { session: null, setCookie: [clearSiteCookie(o, req)] };
   if (!s || s.aud !== o.clientId || typeof s.sid !== 'string' || typeof s.ep !== 'number' || (s.tier !== 'standard' && s.tier !== 'high')) return dead;
+  if (o.revocations && typeof s.sj === 'string' && (await o.revocations.isRevoked(s.sj))) return dead;
   const t = nowS(o);
   let next: SiteSession = s;
   let changed = false;
@@ -268,10 +315,33 @@ export async function verifySiteSession(req: Request, o: SsoOptions): Promise<Ve
   return { session: next, setCookie: [await sessionCookie(o, req, rest as SiteSessionClaims)] };
 }
 
-/** The hub's logout URL ("Sign out of all b*X sites"), coming back to `returnTo` on this origin. */
-export function hubLogoutUrl(o: Pick<SsoOptions, 'clientId' | 'hub'>, siteOrigin: string): string {
+/**
+ * The hub's logout URL ("Sign out of all b*X sites"), coming back to this origin's home page. With a logout_hint
+ * (logoutHint(sid), made by this site's server from the visitor's session) the hub signs out at once; without one it
+ * shows a confirm page, so a link on a foreign page can't sign anyone out of everything.
+ */
+export function hubLogoutUrl(o: Pick<SsoOptions, 'clientId' | 'hub'>, siteOrigin: string, hint?: string): string {
   const q = new URLSearchParams({ client_id: o.clientId, redirect_uri: new URL(siteOrigin).origin + '/' });
+  if (hint) q.set('logout_hint', hint);
   return `${hubOrigin(o.hub ?? DEFAULT_HUB)}/logout?${q}`;
+}
+
+/** True when the visitor proved the wallet at the hub within the last maxAgeS seconds. */
+export function isFresh(session: Pick<SiteSessionClaims, 'at'> | null | undefined, maxAgeS: number, nowMs: number = Date.now()): boolean {
+  if (!session || typeof session.at !== 'number' || !(maxAgeS >= 0)) return false;
+  const age = Math.floor(nowMs / 1000) - session.at;
+  return age >= -30 && age <= maxAgeS;
+}
+
+/**
+ * For sensitive pages: the session if the wallet sign-in at the hub is at most maxAgeS seconds old, else throws
+ * SsoError('login_required'). Send the visitor to sign in again with prompt 'login' (bwx:signin with
+ * detail { prompt: 'login' }), which asks the wallet afresh and refreshes auth_time.
+ */
+export function requireFresh<S extends Pick<SiteSessionClaims, 'at'>>(session: S | null | undefined, maxAgeS: number, nowMs: number = Date.now()): S {
+  if (!session) throw new SsoError('login_required', 'Not signed in');
+  if (!isFresh(session, maxAgeS, nowMs)) throw new SsoError('login_required', 'Sign in again with bWalletX to continue');
+  return session;
 }
 
 const json = (body: unknown, status = 200, cookies: string[] = []) => {
@@ -302,7 +372,18 @@ export function createSso(o: SsoOptions): Sso {
       const { session: s, setCookie } = await verifySiteSession(req, o);
       if (!s) return json({ signedIn: false }, 200, setCookie);
       return json(
-        { signedIn: true, identityKey: s.sub, paymail: s.paymail ?? null, handle: s.handle ?? null, tier: s.tier, uid: s.uid ?? null, iat: s.iat, exp: s.exp, started: s.st },
+        {
+          signedIn: true,
+          identityKey: s.sub,
+          paymail: s.paymail ?? null,
+          handle: s.handle ?? null,
+          tier: s.tier,
+          uid: s.uid ?? null,
+          iat: s.iat,
+          exp: s.exp,
+          started: s.st,
+          authTime: s.at ?? null,
+        },
         200,
         setCookie,
       );
@@ -314,7 +395,13 @@ export function createSso(o: SsoOptions): Sso {
       const from = req.headers.get('origin');
       if (from && from !== origin) return json({ error: 'Wrong origin' }, 403);
       const everywhere = new URL(req.url).searchParams.get('everywhere') === '1';
-      return json({ ok: true, redirect: everywhere ? hubLogoutUrl(o, origin) : null }, 200, [clearSiteCookie(o, req)]);
+      // The session as signed (HMAC and expiry only: no hub round trip needed to sign out).
+      const raw = readCookie(req.headers.get('cookie'), siteCookieName(o, req));
+      const s = raw ? ((await verifySession(raw, { secret: o.secret, now: o.now?.() })) as SiteSession | null) : null;
+      const mine = s && s.aud === o.clientId ? s : null;
+      if (mine && o.revocations && typeof mine.sj === 'string') await o.revocations.revoke(mine.sj, mine.exp);
+      const hint = everywhere && mine && typeof mine.sid === 'string' ? await logoutHint(mine.sid, nowS(o)) : undefined;
+      return json({ ok: true, redirect: everywhere ? hubLogoutUrl(o, origin, hint) : null }, 200, [clearSiteCookie(o, req)]);
     },
   };
 }
