@@ -42,7 +42,7 @@ export type PairLink = {
   lx?: string;
 };
 
-export const BROWSER_HINTS = ['safari', 'chrome', 'firefox', 'samsung', 'edge', 'brave', 'other'] as const;
+export const BROWSER_HINTS = ['safari', 'chrome', 'firefox', 'samsung', 'edge', 'brave', 'opera', 'other'] as const;
 export type BrowserHint = (typeof BROWSER_HINTS)[number];
 export const RID_RE = /^[A-Za-z0-9_-]{16,64}$/;
 export const LOGIN_NONCE_RE = /^[A-Za-z0-9_-]{8,128}$/;
@@ -54,6 +54,7 @@ export function browserHint(ua: string, isBrave = false): BrowserHint {
   if (isBrave) return 'brave';
   if (/SamsungBrowser/i.test(ua)) return 'samsung';
   if (/EdgiOS|EdgA|Edg\//i.test(ua)) return 'edge';
+  if (/OPR\/|OPT\/|Opera/i.test(ua)) return 'opera';
   if (/FxiOS|Firefox/i.test(ua)) return 'firefox';
   if (/CriOS|Chrome/i.test(ua)) return 'chrome';
   if (/Safari/i.test(ua)) return 'safari';
