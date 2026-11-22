@@ -15,6 +15,14 @@ import { fakePhone } from './phone';
 const ORIGIN = 'https://example.com';
 const PAGE = 'https://example.com/rooms/lounge?x=1';
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
+/** Wait on a condition, not a fixed time (review 4: fixed ticks flaked under the full parallel run). */
+const until = async (ok: () => boolean, ms = 4000) => {
+  const t = Date.now();
+  while (!ok()) {
+    if (Date.now() - t > ms) throw new Error('timed out waiting');
+    await tick(5);
+  }
+};
 const mapStorage = (): PairStorage & { m: Map<string, string> } => {
   const m = new Map<string, string>();
   return { m, getItem: (k) => m.get(k) ?? null, setItem: (k, v) => void m.set(k, v), removeItem: (k) => void m.delete(k) };
@@ -41,7 +49,7 @@ describe('the site tab sleeps while the user is in bWalletX', () => {
     const old = siteSocket(relay, c)!;
     old.drop();
     const phone = fakePhone(link, relay.socket, PrivateKey.fromRandom());
-    await tick(20);
+    await until(() => !!phone.readyFrame);
     expect(phone.readyFrame).toBeTruthy(); // the user tapped Connect; hello + ready are queued at the relay
     old.wakeClosed(); // back in Safari: the page hears its socket closed
     await tick(5);
@@ -199,7 +207,7 @@ describe('same phone: return to the site, sign-in folded into Connect', () => {
     const c = parsePairUrl(link).c;
     siteSocket(relay, c)!.frozen = true; // the old tab is asleep: hello and ready are swallowed
     const phone = fakePhone(link, relay.socket, root, { fold: true });
-    await tick(20);
+    await until(() => !!phone.readyFrame);
     expect(phone.returnTo).toMatch(/^https:\/\/example\.com\/#bwx=ok&rid=/);
     const frag = parseReturnFragment(new URL(phone.returnTo!).hash)!;
     expect(frag.wk && frag.f).toBeTruthy();
@@ -235,7 +243,7 @@ describe('same phone: return to the site, sign-in folded into Connect', () => {
     // The old tab sleeps (hidden: it doesn't rejoin on its own while the new tab runs).
     siteSocket(relay, parsePairUrl(link).c)!.drop();
     const phone = fakePhone(link, relay.socket, PrivateKey.fromRandom(), { fold: true });
-    await tick(20);
+    await until(() => !!phone.readyFrame);
     const hash = new URL(phone.returnTo!).hash;
     const opts = { hash, href: phone.returnTo!, replaceUrl: () => {}, returnStorage: returns, storage: mapStorage(), socket: relay.socket };
     expect(await resumeReturnedPairing(opts)).not.toBeNull();
@@ -252,7 +260,7 @@ describe('same phone: return to the site, sign-in folded into Connect', () => {
     await tick(5);
     siteSocket(relay, parsePairUrl(link).c)!.frozen = true;
     const phone = fakePhone(link, relay.socket, root, { fold: true });
-    await tick(20);
+    await until(() => !!phone.readyFrame);
     hash = new URL(phone.returnTo!).hash;
     // Back in Safari: the frozen socket is found closed, and the hash arrives (hashchange / pageshow).
     const old = siteSocket(relay, parsePairUrl(link).c)!;
@@ -303,8 +311,8 @@ describe('review 22 Nov: a forged return fragment', () => {
     void pairBwalletX({ origin: ORIGIN, storage: null, returnStorage: returns, socket: relay.socket, returnTo: PAGE, login: challenge(), onCode: () => {}, onLink: (l) => (link = l) }).catch(() => {});
     await tick(5);
     siteSocket(relay, parsePairUrl(link).c)!.drop(); // the tab sleeps; the real phone's frames queue at the relay
-    fakePhone(link, relay.socket, real, { fold: true });
-    await tick(20);
+    const realPhone = fakePhone(link, relay.socket, real, { fold: true });
+    await until(() => !!realPhone.readyFrame);
     const hash = await forge(link, attacker);
     const r = await resumeReturnedPairing({ hash, href: `${ORIGIN}/${hash}`, replaceUrl: () => {}, returnStorage: returns, storage: mapStorage(), socket: relay.socket, waitMs: 1000 });
     // The real wallet pairs (over the relay). The forger's sign-in is never used, and the real one never travels over
@@ -370,6 +378,35 @@ describe('review 22 Nov: spends are never re-sent', () => {
   });
 });
 
+describe('review 4 (22 Nov)', () => {
+  it('(L4) a waiting sign-in signature is not re-sent either: only reads are', async () => {
+    const relay = new FakeRelay(ORIGIN);
+    const wake = wakeHook();
+    let phone: ReturnType<typeof fakePhone> | undefined;
+    const w = await pairBwalletX({
+      origin: ORIGIN,
+      storage: null,
+      socket: relay.socket,
+      onWake: wake.on,
+      callTimeoutMs: 400,
+      onCode: () => {},
+      onLink: (l) => setTimeout(() => (phone = fakePhone(l, relay.socket, PrivateKey.fromRandom(), { slow: ['createSignature'] })), 0),
+    });
+    const s = siteSocket(relay, [...relay.channels.keys()][0])!;
+    s.frozen = true;
+    const sig = w.createSignature({ protocolID: [2, 'bwallet sign in'], keyID: 'n0nce_abcdef', counterparty: 'anyone', data: [1, 2, 3] });
+    sig.catch(() => undefined);
+    const read = w.getPublicKey({ identityKey: true });
+    await until(() => (phone?.requests.length ?? 0) >= 2);
+    s.drop();
+    s.wakeClosed();
+    wake.fire();
+    await read;
+    await tick(500);
+    expect(phone!.requests.filter((a) => a === 'createSignature').length).toBe(1);
+  });
+});
+
 describe('review 2 (22 Nov)', () => {
   /** localStorage-like, with key()/length so stale entries can be found. */
   const listStorage = () => {
@@ -424,7 +461,7 @@ describe('review 2 (22 Nov)', () => {
     const old = siteSocket(relay, parsePairUrl(link).c)!;
     old.frozen = true;
     const phone = fakePhone(link, relay.socket, PrivateKey.fromRandom(), { fold: true });
-    await tick(20);
+    await until(() => !!phone.readyFrame);
     // The new tab took the return first (resumeReturnedPairing deletes the entry once confirmed)…
     expect(returns.m.size).toBe(1);
     returns.m.clear();
@@ -432,7 +469,7 @@ describe('review 2 (22 Nov)', () => {
     old.frozen = false;
     old.deliver(phone.hello);
     old.deliver(JSON.stringify(phone.readyFrame));
-    await tick(20);
+    await until(() => outcome !== 'pending');
     expect((outcome as { code?: string })?.code).toBe('RETURNED_IN_ANOTHER_TAB');
   });
 
@@ -446,7 +483,7 @@ describe('review 2 (22 Nov)', () => {
     expect(returns.m.has('bwalletx.connect.return.staleStaleStaleStale1')).toBe(false);
     siteSocket(relay, parsePairUrl(link).c)!.drop();
     const phone = fakePhone(link, relay.socket, PrivateKey.fromRandom(), { fold: true });
-    await tick(20);
+    await until(() => !!phone.readyFrame);
     const hash = new URL(phone.returnTo!).hash;
     expect(await resumeReturnedPairing({ hash, href: `${ORIGIN}/${hash}`, replaceUrl: () => {}, returnStorage: returns, storage: mapStorage(), socket: relay.socket })).not.toBeNull();
     expect([...returns.m.keys()].filter((k) => k.startsWith('bwalletx.connect.return.'))).toEqual([]);

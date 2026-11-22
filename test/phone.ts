@@ -26,6 +26,8 @@ export interface FakePhoneOptions {
   manual?: boolean;
   /** createAction is recorded but never answered (the payment sheet is still up). */
   slowActions?: boolean;
+  /** These actions are recorded but never answered (their sheet is still up). */
+  slow?: string[];
 }
 
 /**
@@ -119,6 +121,7 @@ export function fakePhone(link: string, socket: SocketFactory, root: PrivateKey,
       if (seen) return ws.send(JSON.stringify(await state.sealer.seal(seen)));
       state.requests.push(m.action);
       if (opts.slowActions && m.action === 'createAction') return;
+      if (opts.slow?.includes(m.action)) return;
       // ProtoWallet has no createAction: answer a spend with a stand-in txid.
       const result = m.action === 'createAction' ? { txid: '00'.repeat(32) } : await pw[m.action].call(pw, m.params);
       const res: PairMessage = { t: 'res', id: m.id, result };
