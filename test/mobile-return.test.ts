@@ -8,6 +8,7 @@
 import { PrivateKey, ProtoWallet, PublicKey, Signature, Utils } from '@bsv/sdk';
 import { describe, expect, it } from 'vitest';
 import { pairBwalletX, resumeReturnedPairing, type PairStorage, type PairedWallet } from '../src/pair';
+import { signPairProofs } from '../src/server';
 import { Sealer, deriveSession, loginMessageFor, parsePairUrl, parseReturnFragment, returnFragment } from '../src/protocol';
 import { FakeRelay, FakeSocket } from './fake-relay';
 import { fakePhone } from './phone';
@@ -323,6 +324,123 @@ describe('review 22 Nov: spends are never re-sent', () => {
     await tick(500);
     expect(phone!.requests.filter((a) => a === 'createAction').length).toBe(1);
     expect(spendErr?.code).toBe('NO_ANSWER_MAYBE_SENT');
+  });
+});
+
+describe('review 2 (22 Nov)', () => {
+  /** localStorage-like, with key()/length so stale entries can be found. */
+  const listStorage = () => {
+    const m = new Map<string, string>();
+    return {
+      m,
+      getItem: (k: string) => m.get(k) ?? null,
+      setItem: (k: string, v: string) => void m.set(k, v),
+      removeItem: (k: string) => void m.delete(k),
+      key: (i: number) => [...m.keys()][i] ?? null,
+      get length() {
+        return m.size;
+      },
+    };
+  };
+  const ch = () => ({ nonce: 'n0nce_' + Math.random().toString(36).slice(2, 12), expiresAt: new Date(Date.now() + 120_000).toISOString() });
+
+  it('(2) a spend that never went out (relay unreachable) is sent once when the link is back', async () => {
+    const relay = new FakeRelay(ORIGIN);
+    const wake = wakeHook();
+    const root = PrivateKey.fromRandom();
+    let phone: ReturnType<typeof fakePhone> | undefined;
+    const w = await pairBwalletX({
+      origin: ORIGIN,
+      storage: null,
+      socket: relay.socket,
+      onWake: wake.on,
+      callTimeoutMs: 3000,
+      onCode: () => {},
+      onLink: (l) => setTimeout(() => (phone = fakePhone(l, relay.socket, root)), 0),
+    });
+    const s = siteSocket(relay, [...relay.channels.keys()][0])!;
+    s.drop();
+    s.wakeClosed();
+    relay.refuse = true;
+    const spend = w.createAction({ description: 'x', outputs: [] } as never);
+    await tick(30);
+    relay.refuse = false;
+    wake.fire();
+    await spend;
+    expect(phone!.requests.filter((a) => a === 'createAction').length).toBe(1);
+  });
+
+  it('(4) a tab whose return was taken by another tab never finishes too', async () => {
+    const relay = new FakeRelay(ORIGIN);
+    const returns = mapStorage();
+    let link = '';
+    let outcome: unknown = 'pending';
+    const p = pairBwalletX({ origin: ORIGIN, storage: null, returnStorage: returns, socket: relay.socket, returnTo: PAGE, login: ch(), onCode: () => {}, onLink: (l) => (link = l) });
+    p.then(() => (outcome = 'ok'), (e) => (outcome = e));
+    await tick(5);
+    const old = siteSocket(relay, parsePairUrl(link).c)!;
+    old.frozen = true;
+    const phone = fakePhone(link, relay.socket, PrivateKey.fromRandom(), { fold: true });
+    await tick(20);
+    // The new tab takes the return first…
+    const hash = new URL(phone.returnTo!).hash;
+    const r = await resumeReturnedPairing({ hash, href: `${ORIGIN}/${hash}`, replaceUrl: () => {}, returnStorage: returns, storage: mapStorage(), socket: relay.socket });
+    expect(r).not.toBeNull();
+    // …then the old tab wakes and its relay hands it hello and ready: it must stop, not finish a second sign-in.
+    old.frozen = false;
+    old.deliver(phone.hello);
+    old.deliver(JSON.stringify(phone.readyFrame));
+    await tick(20);
+    expect((outcome as { code?: string })?.code).toBe('RETURNED_IN_ANOTHER_TAB');
+  });
+
+  it('(5) a taken return is deleted (it holds the pairing key), and stale ones go when a pairing starts', async () => {
+    const relay = new FakeRelay(ORIGIN);
+    const returns = listStorage();
+    returns.setItem('bwalletx.connect.return.staleStaleStaleStale1', JSON.stringify({ v: 1, rid: 'staleStaleStaleStale1', at: Date.now() - 11 * 60_000, s: 'ab'.repeat(32) }));
+    let link = '';
+    void pairBwalletX({ origin: ORIGIN, storage: null, returnStorage: returns, socket: relay.socket, returnTo: PAGE, login: ch(), onCode: () => {}, onLink: (l) => (link = l) }).catch(() => {});
+    await tick(5);
+    expect(returns.m.has('bwalletx.connect.return.staleStaleStaleStale1')).toBe(false);
+    siteSocket(relay, parsePairUrl(link).c)!.drop();
+    const phone = fakePhone(link, relay.socket, PrivateKey.fromRandom(), { fold: true });
+    await tick(20);
+    const hash = new URL(phone.returnTo!).hash;
+    expect(await resumeReturnedPairing({ hash, href: `${ORIGIN}/${hash}`, replaceUrl: () => {}, returnStorage: returns, storage: mapStorage(), socket: relay.socket })).not.toBeNull();
+    expect([...returns.m.keys()].filter((k) => k.startsWith('bwalletx.connect.return.'))).toEqual([]);
+  });
+
+  it('(1) a site with a pairing key puts its proofs (s, s2) on the link', async () => {
+    const relay = new FakeRelay(ORIGIN);
+    const siteKey = PrivateKey.fromRandom();
+    let link = '';
+    void pairBwalletX({
+      origin: ORIGIN,
+      storage: null,
+      returnStorage: mapStorage(),
+      socket: relay.socket,
+      returnTo: PAGE,
+      browser: 'safari',
+      login: ch(),
+      proof: async (f) => signPairProofs(f, { origin: ORIGIN, key: siteKey }),
+      onCode: () => {},
+      onLink: (l) => (link = l),
+    }).catch(() => {});
+    await tick(20);
+    const l = parsePairUrl(link);
+    const pub = siteKey.toPublicKey();
+    expect(pub.verify(Utils.toArray(`bwallet-pair-v1|proof|${l.c}|${l.k.toLowerCase()}|${l.o}|${l.e}`, 'utf8'), Signature.fromDER(Utils.toArray(l.s!, 'hex')))).toBe(true);
+    expect(pub.verify(Utils.toArray(`bwallet-pair-v2|proof|${l.c}|${l.k.toLowerCase()}|${l.o}|${l.e}|${l.ret}|${l.rid}|${l.b}`, 'utf8'), Signature.fromDER(Utils.toArray(l.s2!, 'hex')))).toBe(true);
+  });
+
+  it('(1) the server signs only its own origin, its root as ret, and a live expiry', () => {
+    const key = PrivateKey.fromRandom();
+    const base = { c: 'Q2hhbm5lbElkMTIzNDU2Nw', k: PrivateKey.fromRandom().toPublicKey().toString(), o: ORIGIN, e: Math.floor(Date.now() / 1000) + 100 };
+    expect(signPairProofs(base, { origin: ORIGIN, key })?.s).toMatch(/^30/);
+    expect(signPairProofs({ ...base, o: 'https://evil.example' }, { origin: ORIGIN, key })).toBeNull();
+    expect(signPairProofs({ ...base, e: base.e + 3600 }, { origin: ORIGIN, key })).toBeNull();
+    expect(signPairProofs({ ...base, ret: `${ORIGIN}/deep/path`, rid: 'r'.repeat(22) }, { origin: ORIGIN, key })).toBeNull();
+    expect(signPairProofs({ ...base, ret: `${ORIGIN}/`, rid: 'r'.repeat(22), b: 'safari' }, { origin: ORIGIN, key })?.s2).toMatch(/^30/);
   });
 });
 

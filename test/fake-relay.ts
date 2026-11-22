@@ -8,10 +8,21 @@ import type { SocketLike } from '../src/pair';
 export class FakeRelay {
   channels = new Map<string, { site?: FakeSocket; wallet?: FakeSocket; queue: { site: string[]; wallet: string[] } }>();
   urls: string[] = [];
+  /** The relay is unreachable: new sockets close before opening. */
+  refuse = false;
   constructor(public origin = 'https://example.com') {}
 
   socket = (url: string): SocketLike => {
     this.urls.push(url);
+    if (this.refuse) {
+      const dead = new FakeSocket(this, 'x', 'site');
+      queueMicrotask(() => {
+        dead.readyState = 3;
+        dead.onerror?.({});
+        dead.onclose?.({});
+      });
+      return dead;
+    }
     const u = new URL(url);
     const channel = u.pathname.split('/').pop()!;
     const role = u.searchParams.get('role') as 'site' | 'wallet';
