@@ -121,21 +121,30 @@ describe('same phone: return to the site, sign-in folded into Connect', () => {
     expect(parsePairUrl(link).ret).toBeUndefined();
   });
 
-  it('a folded sign-in is answered by the paired wallet without another trip to the phone', async () => {
+  it('a folded sign-in (from the return, same tab) is answered by the paired wallet without another trip', async () => {
     const relay = new FakeRelay(ORIGIN);
     const root = PrivateKey.fromRandom();
     const ch = challenge();
+    const wake = wakeHook();
+    let hash = '';
     let phone: ReturnType<typeof fakePhone> | undefined;
-    const w = await pairBwalletX({
+    const p = pairBwalletX({
       origin: ORIGIN,
       storage: null,
       returnStorage: mapStorage(),
       socket: relay.socket,
+      onWake: wake.on,
+      readHash: () => hash,
+      replaceUrl: () => (hash = ''),
       returnTo: PAGE,
       login: ch,
       onCode: () => {},
       onLink: (l) => setTimeout(() => (phone = fakePhone(l, relay.socket, root, { fold: true })), 0),
     });
+    await tick(30);
+    hash = new URL(phone!.returnTo!).hash; // the wallet opens the return in this tab
+    wake.fire();
+    const w = await p;
     expect(w.signedIn?.identityKey).toBe(root.toPublicKey().toString());
     const [{ publicKey }, { signature }] = await Promise.all([
       w.getPublicKey({ identityKey: true }),
@@ -143,10 +152,38 @@ describe('same phone: return to the site, sign-in folded into Connect', () => {
     ]);
     expect(phone!.requests).toEqual([]); // nothing went to the phone: it is asleep by now
     expect(publicKey).toBe(root.toPublicKey().toString());
-    // A real signature by the identity key under the login protocol (what verifySignIn checks).
-    const pub = PublicKey.fromString(publicKey);
-    expect(pub.toString()).toBe(root.toPublicKey().toString());
     expect(Signature.fromDER(signature).toDER().length).toBeGreaterThan(60);
+  });
+
+  it('CTO 22 Nov: a sign-in signature that arrives over the RELAY is never used', async () => {
+    const relay = new FakeRelay(ORIGIN);
+    const w = await pairBwalletX({
+      origin: ORIGIN,
+      storage: null,
+      returnStorage: mapStorage(),
+      socket: relay.socket,
+      returnTo: PAGE,
+      login: challenge(),
+      onCode: () => {},
+      onLink: (l) => setTimeout(() => fakePhone(l, relay.socket, PrivateKey.fromRandom(), { loginOverRelay: true }), 0),
+    });
+    expect(w.signedIn).toBeUndefined();
+  });
+
+  it('CTO 22 Nov: "signed in, see the return" with no return coming falls back to the usual sign-in request', async () => {
+    const relay = new FakeRelay(ORIGIN);
+    const w = await pairBwalletX({
+      origin: ORIGIN,
+      storage: null,
+      returnStorage: mapStorage(),
+      socket: relay.socket,
+      returnTo: PAGE,
+      returnWaitMs: 100,
+      login: challenge(),
+      onCode: () => {},
+      onLink: (l) => setTimeout(() => fakePhone(l, relay.socket, PrivateKey.fromRandom(), { fold: true }), 0),
+    });
+    expect(w.signedIn).toBeUndefined(); // paired; the sign-in then goes as a request (the wallet's separate sheet)
   });
 
   it('the return tab finishes the pairing and the sign-in once the relay confirms the fragment (the first frames were lost)', async () => {
