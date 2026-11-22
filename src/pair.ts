@@ -76,9 +76,10 @@ export interface PairingOptions extends PairConnectionOptions {
   /** This page's origin, as the relay will see it. Default location.origin. */
   origin?: string;
   /**
-   * (0.9.0) Same phone: the page to send the user back to after Connect (its hash is dropped). Must be https on this
-   * origin or a subdomain. pairingModal() sets it on phones and tablets; leave it unset for a QR another device scans.
-   * bWalletX 5.2.61+ opens it with the result in the fragment; the page then calls resumeReturnedPairing().
+   * (0.9.0) Same phone: the page the sign-in starts on. Must be https on exactly this origin. Only origin + path are
+   * kept, in this browser; the link names the origin's root, which bWalletX 5.2.61+ opens after Connect with the
+   * result in the fragment; that page calls resumeReturnedPairing(), which gives this page back to go to.
+   * pairingModal() sets it on phones and tablets; leave it unset for a QR another device scans.
    */
   returnTo?: string;
   /** (0.9.0) The browser this page runs in (`b`), so the wallet returns to it. Default: from the user agent. */
@@ -140,6 +141,8 @@ interface PendingReturn {
   e: number; // link expiry, seconds
   rid: string;
   ret: string;
+  /** The page the pairing started on (origin + path, no query or fragment). Never sent anywhere. */
+  page?: string;
   at: number;
   ln?: string;
   /** Set (instead of deleting the entry) when a tab took it, so the other tab knows to stop. */
@@ -201,17 +204,24 @@ const defaultReplace = (url: string) => {
   }
 };
 const withoutHash = (href: string) => href.split('#')[0];
+/** origin + path: no query, no fragment. */
+const pageOf = (href: string) => {
+  try {
+    const u = new URL(href);
+    return `${u.origin}${u.pathname}`;
+  } catch {
+    return '';
+  }
+};
 
-/** A return to `ret` is one the wallet will accept for `origin`: https, same host or a subdomain, no port/userinfo. */
+/** A return to `ret` is one the wallet will accept for `origin`: https, exactly that origin, no port or userinfo. */
 export function isAllowedReturn(ret: string, origin: string): boolean {
   if (!ret || ret.length > RET_MAX_BYTES) return false;
   try {
     const o = new URL(origin);
     const r = new URL(ret);
     if (o.protocol !== 'https:' || r.protocol !== 'https:' || r.username || r.password || r.port || o.port) return false;
-    const host = r.hostname.toLowerCase();
-    const base = o.hostname.toLowerCase();
-    return host === base || host.endsWith(`.${base}`);
+    return r.origin === o.origin; // exactly this origin (review 22 Nov 2026: no subdomains)
   } catch {
     return false;
   }
@@ -262,6 +272,34 @@ function foldedFrom(login: ReadyLogin | undefined, nonce: string | undefined): F
   if (typeof login.k !== 'string' || !/^0[23][0-9a-f]{64}$/i.test(login.k)) return undefined;
   if (typeof login.sig !== 'string' || !/^[0-9a-f]{16,200}$/i.test(login.sig) || login.sig.length % 2) return undefined;
   return { identityKey: login.k.toLowerCase(), signature: Utils.toArray(login.sig, 'hex'), nonce };
+}
+
+/**
+ * Calls that may be asked again with the same id after a reconnect: reads, and the sign-in signature (bWalletX shows
+ * its own sheet for it, and a repeat signs the same text). Everything else acts (spends, signs other data, writes)
+ * and is sent once only.
+ */
+const READ_ONLY = new Set([
+  'getPublicKey',
+  'isAuthenticated',
+  'waitForAuthentication',
+  'getNetwork',
+  'getVersion',
+  'getHeight',
+  'getHeaderForHeight',
+  'listOutputs',
+  'listActions',
+  'listCertificates',
+  'verifySignature',
+  'verifyHmac',
+  'discoverByIdentityKey',
+  'discoverByAttributes',
+]);
+export function safeToResend(action: string, params: unknown): boolean {
+  if (READ_ONLY.has(action)) return true;
+  if (action !== 'createSignature') return false;
+  const p = (params ?? {}) as { protocolID?: unknown };
+  return Array.isArray(p.protocolID) && p.protocolID[0] === 2 && p.protocolID[1] === 'bwallet sign in';
 }
 
 type Waiting = {
@@ -415,6 +453,10 @@ class Link {
     if (Date.now() - this.lastResend < RESEND_DEDUPE_MS) return;
     this.lastResend = Date.now();
     for (const [id, w] of this.waiting) {
+      // Review 22 Nov 2026: only reads and the sign-in are asked again. A spend (or anything else that acts) is never
+      // re-sent: bWalletX's record of answered ids is in memory, so after iOS kills it a re-sent createAction would
+      // show a second payment sheet. It keeps waiting for its own answer, and times out as "maybe sent".
+      if (!safeToResend(w.action, w.params)) continue;
       const ws = this.ws;
       if (!ws || ws.readyState !== OPEN) return;
       ws.send(JSON.stringify(await this.sealer.seal({ t: 'req', id, action: w.action, params: w.params })));
@@ -426,7 +468,14 @@ class Link {
     const id = `${action}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     const result = new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
-        if (this.waiting.delete(id)) reject(new Error('No answer from bWalletX. Open it, unlocked, and approve.'));
+        if (!this.waiting.delete(id)) return;
+        if (safeToResend(action, params)) reject(Object.assign(new Error('No answer from bWalletX. Open it, unlocked, and approve.'), { code: 'NO_ANSWER' }));
+        else
+          reject(
+            Object.assign(new Error('No answer from bWalletX. It may still have done this: check bWalletX before you try again.'), {
+              code: 'NO_ANSWER_MAYBE_SENT',
+            }),
+          );
       }, this.timeoutMs);
       this.waiting.set(id, { resolve, reject, timer, action, params });
     });
@@ -542,9 +591,12 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
   // b-Aware 26 Oct 2026: our own role claim (N3-1), and the digest of the wallet claim only the QR can produce (N3-2).
   const siteClaim = newClaim();
   const sitePub = siteKey.toPublicKey().toString();
-  // Same phone (0.9.0): where to come back to, and the one-time id that ties the return to this pairing.
-  const ret = opts.returnTo ? withoutHash(opts.returnTo) : '';
-  const sameDevice = !!ret && isAllowedReturn(ret, origin);
+  // Same phone (0.9.0): the one-time id that ties the return to this pairing. Review 22 Nov 2026: the link names only
+  // this origin's root (the wallet returns there: a path chosen by an unproven link is not followed), and no query or
+  // fragment ever goes into the link (OAuth codes and the like). The page itself is kept here, for after the return.
+  const page = opts.returnTo ? pageOf(opts.returnTo) : '';
+  const sameDevice = !!page && isAllowedReturn(page, origin);
+  const ret = sameDevice ? `${new URL(origin).origin}/` : '';
   const rid = sameDevice ? newRequestId() : undefined;
   const ln = opts.login && LOGIN_NONCE_RE.test(opts.login.nonce) ? opts.login.nonce : undefined;
   const lx = ln ? isoExpiry(opts.login!.expiresAt) ?? undefined : undefined;
@@ -587,6 +639,11 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
         .finally(() => fail(new Error('cancelled')));
     });
 
+    // Review 22 Nov 2026: a return fragment is only a CLAIM. Anyone holding the link (it carries the channel, our
+    // pairing key and the rid) can seal a `ready` with their own key and sign-in. It counts only once the relay's
+    // wallet (the one the relay bound to this channel) says hello with the same key.
+    let provisional: { wk: string; f: SealedFrame } | null = null;
+
     const onHello = async (h: HelloFrame) => {
       if (sealer) return; // said again after a rejoin: we have it
       walletKey = h.k;
@@ -594,6 +651,12 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
       if (sealer) return;
       sealer = new Sealer(s.key, 'site');
       opts.onCode(s.code);
+      const p = provisional;
+      provisional = null;
+      if (p && p.wk.toLowerCase() === h.k.toLowerCase()) {
+        const msg = await sealer.open(p.f);
+        if (msg?.t === 'ready') await finish(msg, ws);
+      }
     };
 
     const finish = async (msg: Extract<PairMessage, { t: 'ready' }>, sock: SocketLike | null) => {
@@ -668,8 +731,13 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
       if (!frag || frag.rid !== rid) return false;
       replaceUrl(withoutHash(defaultHref()) || ret);
       if (!frag.f || !frag.wk) return false; // an older wallet: the relay carries hello and ready
-      if (!sealer) await onHello({ t: 'hello', k: frag.wk, info: { name: 'bWalletX', rdns: '' } });
-      const msg = sealer ? await sealer.open(frag.f) : null;
+      if (!sealer) {
+        // Not confirmed yet: kept until the relay's wallet says hello with this key (onHello), never used before.
+        provisional = { wk: frag.wk, f: frag.f };
+        return false;
+      }
+      if (walletKey.toLowerCase() !== frag.wk.toLowerCase()) return false; // not the wallet the relay bound: ignored
+      const msg = await sealer.open(frag.f);
       if (msg?.t === 'ready') {
         await finish(msg, ws);
         return true;
@@ -703,7 +771,7 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
       ...(sameDevice && rid && { ret, rid, ...(b && { b }) }),
       ...(ln && lx && { ln, lx }),
     });
-    if (rid) void writePending(returns, { v: 1, c: channel, r: relay, s: siteKey.toHex(), sc: siteClaim, e: expiry, rid, ret, at: Date.now(), ...(ln && { ln }) });
+    if (rid) void writePending(returns, { v: 1, c: channel, r: relay, s: siteKey.toHex(), sc: siteClaim, e: expiry, rid, ret, page, at: Date.now(), ...(ln && { ln }) });
     opts.onLink(link);
   }));
 }
@@ -726,6 +794,11 @@ export interface ResumedPairing {
   wallet: PairedWallet;
   /** The sign-in signed with Connect: post it to your verify route. null when the wallet didn't fold one. */
   login: FoldedSignIn | null;
+  /**
+   * The page the sign-in started on (origin + path, from this browser's own storage; the wallet returns to the root).
+   * Go there after verifying, if it isn't where you are.
+   */
+  page: string | null;
 }
 
 /**
@@ -743,58 +816,70 @@ export async function resumeReturnedPairing(opts: ResumeOptions = {}): Promise<R
   const returns = opts.returnStorage === undefined ? defaultStorage() : (opts.returnStorage ?? memoryStorage());
   const p = await readPending(returns, frag.rid);
   if (!p || p.taken || Date.now() - p.at > RETURN_TTL_MS || !RID_RE.test(p.rid)) return null;
-  await writePending(returns, { ...p, taken: Date.now() });
   const storage = opts.storage === undefined ? defaultStorage() : (opts.storage ?? memoryStorage());
   const key = opts.storageKey ?? DEFAULT_KEY;
   const socket = opts.socket ?? defaultSocket();
   const S = PrivateKey.fromHex(p.s);
 
-  const fromFrame = async (wk: string, f: SealedFrame) => {
-    const { key: aes } = await deriveSession(S, wk, p.c);
+  type Got = { sealer: Sealer; wk: string; msg: Extract<PairMessage, { t: 'ready' }> };
+  // The fragment's sealed ready (bWalletX 5.2.61+) is PROVISIONAL (review 22 Nov 2026): anyone holding the link can
+  // forge one with their own key. It is used only once the relay's wallet says hello with the same key, or a frame
+  // from the relay opens under it. Without a fragment, hello and ready come from the relay alone.
+  let pending: Got | null = null;
+  if (frag.wk && frag.f) {
+    const { key: aes } = await deriveSession(S, frag.wk, p.c);
     const sealer = new Sealer(aes, 'site');
-    const msg = await sealer.open(f);
-    return msg?.t === 'ready' ? { sealer, wk, msg } : null;
-  };
-  // The fragment carries the sealed ready (bWalletX 5.2.61+); else rejoin the relay and wait for hello and ready.
-  const got =
-    (frag.wk && frag.f ? await fromFrame(frag.wk, frag.f) : null) ??
-    (await new Promise<{ sealer: Sealer; wk: string; msg: Extract<PairMessage, { t: 'ready' }> } | null>((resolve) => {
-      let sealer: Sealer | null = null;
-      let wk = '';
-      let over = false;
-      const ws = socket(relaySocketUrl(p.r, p.c, 'site', undefined, p.sc));
-      const end = (v: { sealer: Sealer; wk: string; msg: Extract<PairMessage, { t: 'ready' }> } | null) => {
-        if (over) return;
-        over = true;
-        clearTimeout(t);
-        if (!v) ws.close();
-        resolve(v);
-      };
-      const t = setTimeout(() => end(null), opts.waitMs ?? 30_000);
-      ws.onclose = () => end(null);
-      ws.onerror = null;
-      ws.onmessage = inOrder(async (ev: { data: unknown }) => {
-        const f = JSON.parse(String(ev.data)) as unknown;
-        if ((f as HelloFrame).t === 'hello' && !sealer) {
-          wk = (f as HelloFrame).k;
-          sealer = new Sealer((await deriveSession(S, wk, p.c)).key, 'site');
-          return;
-        }
-        if (!sealer || !isSealed(f)) return;
-        const msg = await sealer.open(f);
-        if (msg?.t === 'ready') {
-          ws.onclose = null;
-          ws.close();
-          end({ sealer, wk, msg });
-        }
-      });
-    }));
+    const msg = await sealer.open(frag.f);
+    if (msg?.t === 'ready') pending = { sealer, wk: frag.wk, msg };
+  }
+  const got = await new Promise<Got | null>((resolve) => {
+    let sealer: Sealer | null = null;
+    let wk = '';
+    let over = false;
+    const ws = socket(relaySocketUrl(p.r, p.c, 'site', undefined, p.sc));
+    const end = (v: Got | null) => {
+      if (over) return;
+      over = true;
+      clearTimeout(t);
+      ws.onclose = null;
+      ws.close();
+      resolve(v);
+    };
+    const t = setTimeout(() => end(null), opts.waitMs ?? 30_000);
+    ws.onclose = () => end(null);
+    ws.onerror = null;
+    ws.onmessage = inOrder(async (ev: { data: unknown }) => {
+      let f: unknown;
+      try {
+        f = JSON.parse(String(ev.data));
+      } catch {
+        return;
+      }
+      if ((f as HelloFrame).t === 'hello' && typeof (f as HelloFrame).k === 'string' && !sealer) {
+        wk = (f as HelloFrame).k;
+        // The relay's wallet confirms the fragment: same key.
+        if (pending && pending.wk.toLowerCase() === wk.toLowerCase()) return end(pending);
+        pending = null; // a different key: the fragment was not from the relay's wallet
+        sealer = new Sealer((await deriveSession(S, wk, p.c)).key, 'site');
+        return;
+      }
+      if (!isSealed(f)) return;
+      if (pending && (await pending.sealer.open(f))) return end(pending); // a relay frame under the fragment's key
+      if (!sealer) return;
+      const msg = await sealer.open(f);
+      if (msg?.t === 'ready') end({ sealer, wk, msg });
+    });
+  });
   if (!got) return null;
+  // Taken only once confirmed, so a forged or unconfirmed fragment never stops the tab that started the pairing.
+  const again = await readPending(returns, frag.rid);
+  if (!again || again.taken) return null;
+  await writePending(returns, { ...p, taken: Date.now() });
   const stored: StoredPairing = { v: 1, c: p.c, r: p.r, s: p.s, k: got.wk, ...got.sealer.counters, pairedAt: Date.now(), sc: p.sc };
   await Promise.resolve(storage.setItem(key, JSON.stringify(stored))).catch(() => {});
   const login = foldedFrom(got.msg.login, p.ln) ?? null;
   const link = new Link(stored, got.sealer, storage, key, socket, opts.callTimeoutMs ?? 120_000, opts.onWake ?? onPageWake);
-  return { wallet: link.wallet(login ?? undefined), login };
+  return { wallet: link.wallet(login ?? undefined), login, page: p.page && isAllowedReturn(p.page, new URL(href || p.page).origin) ? p.page : null };
 }
 
 /**

@@ -12,12 +12,15 @@ needed a second trip to the wallet that the user never made.
   `pageshow`, `online`, `focus`, `hashchange`; new `onWake` option, `onPageWake` export), the relay's queued hello and
   ready finish the pairing, and unanswered calls are re-sent with the same ids when the wallet says `ready` again
   (bWalletX answers a repeated id from its stored answer, never twice).
-- **Same phone: back to the site.** `pairingModal()` on a phone sets `returnTo` (this page): the link carries `ret`,
-  a one-time `rid` and the browser `b`, and the pairing is saved in localStorage under the rid. bWalletX (5.2.61+)
-  opens `ret#bwx=ok&rid=…&wk=…&f=…` after Connect, usually in a NEW tab. **`resumeReturnedPairing()`** (new) finishes
-  the pairing there from the fragment alone (`f` is the wallet's sealed `ready`; only this browser's pairing key opens
-  it). The provider and `<bwalletx-signin>` call it on load and post the sign-in to `verifyUrl`. The tab that started
-  it stops (`RETURNED_IN_ANOTHER_TAB`) and re-reads `sessionUrl` instead of fighting the new tab for the channel.
+- **Same phone: back to the site.** `pairingModal()` on a phone sets `returnTo` (this page's origin + path; never its
+  query or fragment). The link carries `ret` (this origin's root only), a one-time `rid` and the browser `b`; the
+  pairing and the page are saved in localStorage under the rid. bWalletX (5.2.61+) opens `<root>#bwx=ok&rid=…&wk=…&f=…`
+  after Connect, usually in a NEW tab. **`resumeReturnedPairing()`** (new) finishes the pairing there. The fragment is
+  only a claim (anyone with the link can forge one): its `ready` is used once the relay's wallet says hello with the
+  same key. It returns the starting `page`; the provider and `<bwalletx-signin>` post the sign-in to `verifyUrl` and
+  go back to it. The tab that started it stops (`RETURNED_IN_ANOTHER_TAB`) and re-reads `sessionUrl`.
+- **Only reads and the sign-in are re-sent** after a reconnect (`safeToResend`). A spend or other acting call is sent
+  once: it waits for its own answer and times out as `NO_ANSWER_MAYBE_SENT` ("check bWalletX before you try again").
 - **One trip to the wallet.** For phone pairing the challenge is fetched first and folded into the link (`ln`, `lx`;
   `PairingOptions.login`, `ConnectOptions.login`): bWalletX shows one card, "Connect and sign in", and its `ready`
   carries the signature. The paired wallet answers that sign-in itself (`PairedWallet.signedIn`). Only the standard

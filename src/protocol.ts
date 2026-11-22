@@ -23,7 +23,7 @@ export type WalletInfo = { name: string; icon?: string; rdns: string };
 
 /**
  * The pairing link. Optional same-phone fields (0.9.0; older wallets ignore them, bWalletX 5.2.61+ uses them):
- *   ret  where the wallet sends the user back after Connect (https, on the origin `o` or a subdomain);
+ *   ret  where the wallet sends the user back after Connect (https, exactly the origin `o`; connect sends its root);
  *   rid  a one-time request id (16 random bytes, base64url) that ties the return to the pairing saved in this browser;
  *   b    the browser that opened the link (safari, chrome, firefox, samsung, edge, brave, other);
  *   ln, lx  the sign-in challenge's nonce and expiry (ISO), so Connect and the sign-in are ONE approval in the wallet.
@@ -241,9 +241,10 @@ export const isSealed = (x: unknown): x is SealedFrame =>
 
 /**
  * The wallet's return (0.9.0, bWalletX 5.2.61+): it opens `<ret>#bwx=ok&rid=<rid>&wk=<its pairing key>&f=<frame>`,
- * where `f` is its sealed `ready` (base64url of the frame's JSON). Only the tab holding this pairing's site key can
- * open `f`, so the fragment proves the wallet tapped Connect, and carries the folded sign-in, without the relay: on
- * a phone the browser tab was asleep while the user was in the wallet, and the relay's queue may already be spent.
+ * where `f` is its sealed `ready` (base64url of the frame's JSON). The fragment is a CLAIM, not proof: the link carries
+ * the channel, the site's pairing key and the rid, so anyone holding the link can build one with their own key. A
+ * page uses it only once the relay's wallet says hello with the same `wk` (or a relay frame opens under it); it then
+ * saves the tab from waiting for frames the relay already handed to the frozen tab.
  * A wallet without `wk`/`f` (older builds that return) sends `#bwx=ok&rid=<rid>` only; the relay carries the rest.
  */
 export type ReturnFragment = { rid: string; wk?: string; f?: SealedFrame };

@@ -106,7 +106,8 @@ export function pairingModal(o: PairingModalOptions = {}): PairingOptions & { cl
   // 0.9.0, same phone: ask bWalletX to send the user back to this page after Connect (it can't otherwise: Safari and
   // Chrome never come back on their own), and say which browser to return to.
   const sameDevice = o.mode === 'app' || ((o.mode ?? 'auto') === 'auto' && isTouchDevice());
-  const here = typeof location !== 'undefined' ? location.href : '';
+  // origin + path only: a query (OAuth codes, tokens) or fragment never goes into a pairing link (review 22 Nov 2026).
+  const here = typeof location !== 'undefined' ? `${location.origin}${location.pathname}` : '';
   return {
     signal: ac.signal,
     close,

@@ -426,6 +426,8 @@ export function BwalletXProvider(p: BwalletXProviderProps): ReactElement {
           signedIn: !!(r.login && c.verifyUrl) || s.signedIn,
           error: null,
         }));
+        // The wallet returns to this origin's root (review 22 Nov 2026); go back to the page the sign-in started on.
+        if (r.page && typeof location !== 'undefined' && `${location.origin}${location.pathname}` !== r.page) location.replace(r.page);
       })
       .catch((e) => {
         if (live) fail(e);

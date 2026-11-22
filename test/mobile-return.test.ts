@@ -195,7 +195,8 @@ describe('same phone: return to the site, sign-in folded into Connect', () => {
     let link = '';
     void pairBwalletX({ origin: ORIGIN, storage: null, returnStorage: returns, socket: relay.socket, returnTo: PAGE, login: challenge(), onCode: () => {}, onLink: (l) => (link = l) }).catch(() => {});
     await tick(5);
-    siteSocket(relay, parsePairUrl(link).c)!.frozen = true;
+    // The old tab sleeps (hidden: it doesn't rejoin on its own while the new tab runs).
+    siteSocket(relay, parsePairUrl(link).c)!.drop();
     const phone = fakePhone(link, relay.socket, PrivateKey.fromRandom(), { fold: true });
     await tick(20);
     const hash = new URL(phone.returnTo!).hash;
@@ -311,7 +312,7 @@ describe('review 22 Nov: spends are never re-sent', () => {
     const s = siteSocket(relay, c)!;
     s.frozen = true;
     const spend = w.createAction({ description: 'test spend', outputs: [] } as never);
-    let spendErr: { code?: string } | null = null;
+    let spendErr = null as { code?: string } | null;
     spend.catch((e) => (spendErr = e));
     const read = w.getPublicKey({ identityKey: true });
     await tick(10);

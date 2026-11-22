@@ -343,6 +343,8 @@ function createClass(): CustomElementConstructor {
       if (verifyUrl) rememberIdentity(identityKey);
       if (this.#stateful && !this.#controlled) this.#signedIn({ identityKey, handle: response?.handle ?? null, paymail: response?.paymail ?? null });
       this.#emit('bwalletx-signed-in', { identityKey, method: 'pairing', nonce, signature, response });
+      // The wallet returns to this origin's root (review 22 Nov 2026); go back to the page the sign-in started on.
+      if (r.page && `${location.origin}${location.pathname}` !== r.page) location.replace(r.page);
       return true;
     }
 
