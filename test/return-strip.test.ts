@@ -7,17 +7,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 describe('return fragment stripped at module load', () => {
-  it('the hash is gone by the time the next script runs, and connect still has it', async () => {
-    history.replaceState(null, '', '/rooms/lounge#bwx=ok&rid=AAAAAAAAAAAAAAAAAAAAAA&wk=02aa&f=xx');
-    expect(location.hash).toContain('bwx=ok');
-    vi.resetModules();
-    const pair = await import('../src/pair');
-    // "The next script": runs right after connect's module evaluated.
-    expect(location.hash).toBe('');
-    expect(location.pathname).toBe('/rooms/lounge');
-    expect(pair.hasReturnFragment()).toBe(true);
-  });
-
+  // First: each fresh module import adds its own hashchange listener, so this one runs with exactly one.
   it('a return landing later as a hash change is stripped by connect before other listeners see it', async () => {
     history.replaceState(null, '', '/');
     vi.resetModules();
@@ -27,6 +17,17 @@ describe('return fragment stripped at module load', () => {
     location.hash = '#bwx=ok&rid=BBBBBBBBBBBBBBBBBBBBBB';
     await new Promise((r) => setTimeout(r, 20));
     expect(seen).toBe('');
+    expect(pair.hasReturnFragment()).toBe(true);
+  });
+
+  it('the hash is gone by the time the next script runs, and connect still has it', async () => {
+    history.replaceState(null, '', '/rooms/lounge#bwx=ok&rid=AAAAAAAAAAAAAAAAAAAAAA&wk=02aa&f=xx');
+    expect(location.hash).toContain('bwx=ok');
+    vi.resetModules();
+    const pair = await import('../src/pair');
+    // "The next script": runs right after connect's module evaluated.
+    expect(location.hash).toBe('');
+    expect(location.pathname).toBe('/rooms/lounge');
     expect(pair.hasReturnFragment()).toBe(true);
   });
 
