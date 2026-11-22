@@ -222,7 +222,8 @@ export function bwxSso(opts: BwxSsoOptions): BwxSso {
     chip.setAttribute('data-bwx-sso-chip', '');
     chip.setAttribute('aria-haspopup', 'menu');
     chip.setAttribute('aria-expanded', 'false');
-    const initial = (session.paymail || session.handle || 'b').replace(/^\$/, '').charAt(0).toUpperCase() || 'b';
+    const named = session.paymail || session.handle;
+    const initial = named ? named.replace(/^\$/, '').charAt(0).toUpperCase() || 'b' : 'b';
     chip.append(el('span', 'bwx-sso-av', initial), el('span', 'bwx-sso-name', name));
     const menu = el('div', 'bwx-sso-menu');
     menu.setAttribute('role', 'menu');
