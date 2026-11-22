@@ -1,7 +1,7 @@
 {
   "name": "@bwalletx/connect",
   "version": "0.9.0",
-  "description": "Sign in with bWalletX or any BRC-100 wallet: button, React provider, Next.js sessions, nonce stores, pay/tip helpers, payment verification, wallet picker, and the bApp shell",
+  "description": "Sign in with bWalletX or any BRC-100 wallet: button, React provider, Next.js sessions, nonce stores, pay/tip helpers, payment verification, wallet picker, the bApp shell, and b*X single sign-on",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -92,6 +92,27 @@
         "default": "./dist/shell-react.cjs"
       }
     },
+    "./sso": {
+      "import": {
+        "types": "./dist/sso.d.ts",
+        "default": "./dist/sso.js"
+      },
+      "require": {
+        "types": "./dist/sso.d.cts",
+        "default": "./dist/sso.cjs"
+      }
+    },
+    "./sso/server": {
+      "import": {
+        "types": "./dist/sso-server.d.ts",
+        "default": "./dist/sso-server.js"
+      },
+      "require": {
+        "types": "./dist/sso-server.d.cts",
+        "default": "./dist/sso-server.cjs"
+      }
+    },
+    "./sso/browser": "./dist/bwalletx-sso.global.js",
     "./shell/browser": "./dist/bwalletx-shell.global.js",
     "./schema/bapp.schema.json": "./schema/bapp.schema.json",
     "./browser": "./dist/bwalletx-connect.global.js",
@@ -126,7 +147,8 @@
     "nextjs",
     "react",
     "payments",
-    "handcash-alternative"
+    "handcash-alternative",
+    "single-sign-on"
   ],
   "engines": {
     "node": ">=22"

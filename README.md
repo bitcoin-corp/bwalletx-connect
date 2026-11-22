@@ -124,6 +124,31 @@ Your own UI instead: `const { status, identityKey, paymail, handle, label, avata
 
 **Upgrade the server too.** The one-sheet order needs a challenge route that accepts no key: `createChallenge` / `createBwalletXAuth` from 0.5.5. Against an older server the browser sees the refusal and falls back to the old order (two sheets) by itself; `challengeNeedsIdentityKey` skips the attempt.
 
+## Single sign-on across b*X sites
+
+Sign in once at **id.bwalletx.com** and every b*X site knows who you are. A session proves who you are; it never
+authorises spending (payments still go through a wallet sheet).
+
+```ts
+// lib/sso.ts (server)
+import { createSso } from '@bwalletx/connect/sso/server';
+export const sso = createSso({ clientId: 'your-site', secret: process.env.BWX_SITE_SECRET! });
+// app/sso/callback/route.ts → export const GET = sso.callback;
+// app/sso/session/route.ts  → export const GET = sso.session;
+// app/sso/logout/route.ts   → export const POST = sso.logout;
+// any route: const { session, setCookie } = await sso.verify(req);   // send setCookie back
+```
+
+```ts
+// browser: header has <div data-bwx-sso></div> in the top-right slot
+import { bwxSso } from '@bwalletx/connect/sso';
+bwxSso({ clientId: 'your-site', accountUrl: '/dashboard' });
+// anywhere: window.dispatchEvent(new Event('bwx:signin'))
+```
+
+Static sites: `<script src="/connect/bwalletx-sso.global.js"></script>` then `bwxSso({ clientId })`. Your redirect URI
+(`https://your.site/sso/callback`) must be in the hub's registry exactly.
+
 ## Payments
 
 Other bCorp apps: use `tip()` for the default Tip button (the same one-sheet tip bWalletX shows on artists, NFTs, chat, Friends and Spaces).

@@ -28,6 +28,7 @@ export default defineConfig([
     entry: {
       index: 'src/index.ts', server: 'src/server.ts', next: 'src/next.ts', element: 'src/define.ts', react: 'src/react.ts',
       shell: 'src/shell/index.ts', 'shell-react': 'src/shell/react.ts',
+      sso: 'src/sso/index.ts', 'sso-server': 'src/sso/server.ts',
     },
     format: ['esm', 'cjs'],
     dts: true,
@@ -57,5 +58,16 @@ export default defineConfig([
     minify: true,
     sourcemap: true,
     target: 'es2020',
+  },
+  {
+    // One <script> tag for static sites: window.bwxSso (b*X single sign-on button + chip). No @bsv/sdk.
+    entry: { 'bwalletx-sso': 'src/sso/global.ts' },
+    format: ['iife'],
+    globalName: 'bWalletXSso',
+    platform: 'browser',
+    minify: true,
+    sourcemap: true,
+    target: 'es2020',
+    footer: { js: 'window.bwxSso=bWalletXSso.bwxSso;' },
   },
 ]);
