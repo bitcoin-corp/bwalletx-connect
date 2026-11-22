@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.1 (22 Nov 2026)
+
+- **Fix: sign-in crashed React 19 sites on phones.** React 19 sets known custom-element props as properties, and `<bwalletx-signin>` only had a `state` getter, so a driven `<BwalletxSignin>` threw "Cannot set property state … which has only a getter" when the chooser or pending state rendered. The element now has a `state` setter that mirrors the attribute.
+
 ## 0.9.0 (22 Nov 2026)
 
 Sign in with bWalletX on a phone, on the same phone (P0, 22 Nov 2026: "it has never worked"). Three gaps, all on one

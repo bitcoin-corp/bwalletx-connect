@@ -373,6 +373,11 @@ function createClass(): CustomElementConstructor {
       const a = this.#attr('state') as SigninState | null;
       return a && STATES.includes(a) ? a : this.#phase;
     }
+    /** React 19 sets known custom-element props as properties: mirror `state` to the attribute (0.9.1). */
+    set state(v: SigninState | null | undefined) {
+      if (v == null) this.removeAttribute('state');
+      else this.setAttribute('state', String(v));
+    }
     /** The signed-in account, or null. */
     get account(): SigninAccount | null {
       if (!this.#controlled) return this.#account;
