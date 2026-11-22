@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.10.0 (unreleased)
+
+**Single sign-on for b*X sites.** Sign in once at id.bwalletx.com and every b*X site that uses it knows who you are.
+Sign out of one site, or of all of them at once. A sign-in proves who you are; it never lets a site spend: every
+payment still needs its own approval in bWalletX.
+
+How it works, in plain terms: the site sends you to id.bwalletx.com, you approve one sign-in in bWalletX there, and
+the hub sends you back to the site with a one-time code. The site's server swaps that code for a signed note from the
+hub saying who you are, checks the note, and sets its own cookie. The browser never holds the note, and the site never
+talks to your wallet for sign-in.
+
+- **`@bwalletx/connect/sso` (browser).** `bwxSso({ clientId })` puts a **Sign in with bWalletX** button (and a small
+  **Get bWalletX** link) in `[data-bwx-sso]`, or in a fixed top-right slot. Signed in, it shows an account chip
+  (paymail, $handle or a short key) with **Sign out of this site** and **Sign out of all b*X sites**, and a short
+  "Signed in as …" message. Any page can open sign-in with `window.dispatchEvent(new Event('bwx:signin'))`; gates send
+  visitors with `?returnTo=`. On a first visit with no site session it quietly asks the hub whether you are already
+  signed in elsewhere (`prompt=none`: a full-page redirect that comes straight back, never a hidden frame), at most
+  once an hour per tab. Static sites: one script tag, `@bwalletx/connect/sso/browser` (`bwalletx-sso.global.js`),
+  then `bwxSso({ clientId })`. No `@bsv/sdk` in these entries.
+- **`@bwalletx/connect/sso/server` (site server).** `createSso({ clientId, secret })` gives four handlers for any
+  Request/Response runtime (Next.js route handlers, Vercel functions, Hono, Workers):
+  - `callback` (GET /sso/callback): checks the sign-in attempt's state, swaps the code for the hub's ID token (with
+    the PKCE verifier), checks the token (ES256 only, signed by a key in the hub's JWKS, from the hub, for this site,
+    not expired), sets the site's own httpOnly cookie (`__Host-bwx_site` on https), and returns to a path on this site
+    only (`safeReturnTo`).
+  - `session` (GET /sso/session): who is signed in, for the chip.
+  - `logout` (POST /sso/logout, `?everywhere=1` for all sites): clears the cookie; refuses a cross-site POST.
+  - `verify(req)`: use in your own routes. It re-checks with the hub at most every 5 minutes, so "Sign out of all b*X
+    sites" reaches this site within 5 minutes. Standard sessions last 30 days (sliding); high-tier sessions 1 hour.
+  - `requireFresh(session, seconds)` / `isFresh()`: for sensitive pages, insist the wallet sign-in at the hub is
+    recent; otherwise send the visitor back with `prompt: 'login'`.
+  - Optional `revocations` store, so "Sign out of this site" also kills copies of the cookie (`memoryRevocations()`
+    for development only).
+- **Hub sign-in protocol.** The hub signs in under its own wallet protocol, `HUB_SIGNIN_PROTOCOL`
+  (`[2, 'bwalletx id sign in']`, exported from the root, `/server` and `/sso` entries), which bWalletX accepts
+  from id.bwalletx.com only, so no other site can pass the hub's challenge to the wallet and replay the answer.
+  `hubSignInMessage()` / `parseHubSignInMessage()` (from `/sso`) build and check the exact text the wallet signs.
+- **Security review (2 Nov 2026), included:** `safeReturnTo` refuses anything that normalises to another host
+  (`/..//evil.com`, `/%2e%2e//evil.com`, backslashes); the token, JWKS and epoch fetches refuse redirects; the site
+  session keeps the hub's `auth_time`; "Sign out of all" from a site carries a short-lived `logout_hint`
+  (`logoutHint` / `checkLogoutHint`), and without one the hub asks the visitor to confirm.
+
+The sign-in code in the root entry is unchanged from 0.9.0 (one sheet since 0.5.5).
+
 ## 0.9.0 (22 Nov 2026)
 
 Sign in with bWalletX on a phone, on the same phone (P0, 22 Nov 2026: "it has never worked"). Three gaps, all on one
@@ -112,22 +156,6 @@ Wallet choice (RB, 5 Nov 2026: bWalletX is the default on our sites; no other wa
 - **`useBwalletXAccount()`**: `{ status, identityKey, paymail, handle, label, avatarUrl, error, login, logout }` for sites with their own UI.
 - **`<bwalletx-button>`: the one nav wallet control.** It renders Get bWalletX (deep-linked by platform), Connect bWalletX, or the $handle chip, by state, with the official button look. It guards against duplicates: a second instance and legacy controls in the same header/nav are hidden, with a console warning. Use only this element; don't add your own Get or Connect links.
 - **`<bwalletx-signin label="get">` and `label="play"`**: "Get bWalletX" and "Play with bWalletX", the same official button for download and play-now calls to action (with `href` link mode). First users: terrornode.com and tokenblaster.lol.
-## 0.6.0 (unreleased)
-
-- **b*X single sign-on (`@bwalletx/connect/sso`, `/sso/server`, `/sso/browser`).** Sign in to one b*X site and you are signed in to them all, through the hub at id.bwalletx.com (OAuth-style code + PKCE S256, single-use 60 s codes, exact redirect allow-list, ES256 ID tokens checked against the hub's JWKS, aud = your client_id).
-  - Browser: `bwxSso({ clientId })` mounts the top-right **Sign in with bWalletX** button (plus a small **Get bWalletX**) into `[data-bwx-sso]`, or a fixed top-right slot. Signed in, it shows the account chip (paymail, or a short key) with **Sign out of this site** and **Sign out of all b*X sites**, and a "Signed in as …" toast. Any page opens sign-in with `window.dispatchEvent(new Event('bwx:signin'))`; gates send visitors with `?returnTo=`. A first visit with no site session quietly asks the hub (`prompt=none`, a top-level redirect, never an iframe).
-  - Server (Web Request/Response, works in Next route handlers and Vercel functions): `createSso({ clientId, secret })` gives `callback`, `session`, `logout` and `verify`. `handleSsoCallback()` checks state, exchanges the code with the PKCE verifier, verifies the token, sets your own httpOnly session cookie and returns to a same-site `returnTo` only. `verifySiteSession()` re-checks the hub's session epoch at most every 5 minutes, so "Sign out of all" reaches every site. Risk tiers: standard 30 days sliding, high 1 hour.
-  - No `@bsv/sdk` in these entries: the hub talks to the wallet, the site never does. `bwalletx-sso.global.js` is 8 KB.
-  - Rule zero: a session proves who you are and never authorises spending.
-  - Security review fixes (2 Nov 2026):
-    - The hub signs in under its own protocol, exported as `HUB_SIGNIN_PROTOCOL` (`[2, 'bwalletx id sign in']`, also from the root and `/server` entries) so bWalletX can pin it to id.bwalletx.com. Message: `hubSignInMessage(hub, nonce, time)` = "Sign in to id.bwalletx.com · challenge <nonce> · <ISO time>"; `parseHubSignInMessage` checks it.
-    - `safeReturnTo` parses the value against a placeholder origin and refuses anything whose normalised path starts with `//` or `/\` (so `/..//evil.com` and `/%2e%2e//evil.com` no longer pass), and any backslash; it returns path + query + hash.
-    - JWKS, `/token` and `/session/epoch` fetches use `redirect: 'error'`.
-    - The site session keeps the hub's `auth_time` as `at`; `requireFresh(session, maxAgeS)` (throws `SsoError('login_required')`) and `isFresh()` for sensitive pages. `/sso/session` returns `authTime`.
-    - "Sign out of all" from a site carries a `logout_hint` (`logoutHint(sid)`, checked by the hub with `checkLogoutHint`), so the hub signs out at once; without one the hub asks to confirm.
-    - The site cookie is `__Host-bwx_site` on https (`siteCookieName()`); `bwx_site` on http://localhost.
-    - Optional `revocations` store (`memoryRevocations()` for dev): "Sign out of this site" records the site session as revoked server-side. Without one, sign-out clears the cookie in that browser only.
-- **3 sheets → 1.** `signInWithBwalletX` fetches the challenge first (no key needed), then asks the wallet for `getPublicKey({ identityKey: true })` and `createSignature` together (Promise.all), so the user approves one sheet. Pass `identityKey` to reuse a connected identity (signature only). `createChallenge` no longer needs `identityKey`; `verifySignIn` binds the key the browser claims, and the signature only verifies for that key. `challenge` is now `(identityKey?: string) => …`; servers older than 0.6 can keep the old order with `challengeNeedsIdentityKey: true`.
 
 ## 0.5.4 (unreleased)
 
