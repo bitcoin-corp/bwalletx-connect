@@ -66,14 +66,18 @@ export function browserHint(ua: string, isBrave = false): BrowserHint {
 /** A fresh one-time request id. */
 export const newRequestId = () => b64url(crypto.getRandomValues(new Uint8Array(16)));
 
-/** The sign-in a wallet folded into its `ready` (identity key and DER signature, hex). */
+/**
+ * The sign-in a wallet folded into Connect (identity key and DER signature, hex). It travels ONLY in the return
+ * fragment's sealed ready (CTO 22 Nov 2026), never over the relay: the relay's ready says `ls: 1` ("signed in, see the
+ * return") instead. A site ignores `login` on a ready that came over the relay.
+ */
 export type ReadyLogin = { k: string; sig: string };
 
 /** Plaintext messages inside encrypted frames. */
 export type PairMessage =
   | { t: 'req'; id: string; action: string; params: unknown }
   | { t: 'res'; id: string; result?: unknown; error?: { code: string; message: string } }
-  | { t: 'ready'; wcv?: 2; nc?: string; login?: ReadyLogin }
+  | { t: 'ready'; wcv?: 2; nc?: string; login?: ReadyLogin; ls?: 1 }
   | { t: 'ping' }
   | { t: 'close'; reason: string };
 

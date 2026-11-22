@@ -98,6 +98,11 @@ export interface PairingOptions extends PairConnectionOptions {
    * as proven and signs in on the Connect card (one tap); without one it asks for the sign-in on a separate sheet.
    */
   proof?: (fields: { c: string; k: string; o: string; e: number; ret?: string; rid?: string; b?: string }) => Promise<{ s?: string; s2?: string } | null>;
+  /**
+   * (0.9.0) After the wallet says "signed in, see the return" (`ls`), how long to wait for that return before pairing
+   * without it (the sign-in then goes as a request, on the wallet's separate sheet). Default 20000 ms.
+   */
+  returnWaitMs?: number;
   /** (0.9.0) Tests: the current location hash, and how to drop it from the address bar. */
   readHash?: () => string;
   replaceUrl?: (url: string) => void;
@@ -662,10 +667,12 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
     let settled = false;
     let reopenTimer: ReturnType<typeof setTimeout> | undefined;
     let pendingSaved = false;
+    let returnWait: ReturnType<typeof setTimeout> | undefined;
     const done = () => {
       settled = true;
       clearTimeout(timer);
       clearTimeout(reopenTimer);
+      clearTimeout(returnWait);
       unwake();
     };
     const fail = (e: Error) => {
@@ -732,6 +739,18 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
       resolve(link.wallet(foldedFrom(msg.login, ln)));
     };
 
+    // The wallet signed in with Connect and sends the signature in its return (the fragment), not over the relay. Wait
+    // for that return (takeHash, or a new tab); if none comes, pair without it and the sign-in goes as a request.
+    const onSignedInSeeReturn = async (msg: Extract<PairMessage, { t: 'ready' }>, sock: SocketLike) => {
+      if (pendingSaved && rid && !(await readPending(returns, rid)))
+        return fail(Object.assign(new Error('Signed in from another tab.'), { code: 'RETURNED_IN_ANOTHER_TAB' }));
+      if (await takeHash()) return;
+      clearTimeout(returnWait);
+      returnWait = setTimeout(() => {
+        if (!settled) void finish(msg, ws ?? sock);
+      }, opts.returnWaitMs ?? 20_000);
+    };
+
     const handler = (sock: SocketLike) =>
       inOrder(async (ev: { data: unknown }) => {
         if (settled || sock !== ws) return;
@@ -745,8 +764,13 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
         if (!sealer || !isSealed(f)) return;
         const msg = await sealer.open(f);
         if (!msg) return;
-        if (msg.t === 'ready') await finish(msg, sock);
-        else if (msg.t === 'close') fail(new Error('Pairing was declined in bWalletX'));
+        if (msg.t === 'ready') {
+          // CTO 22 Nov 2026: a sign-in signature never counts when it came over the relay (a script that opened this
+          // channel could be reading it). It comes only in the return fragment, in this browser.
+          const relayed = { ...msg, login: undefined };
+          if (msg.ls && rid) await onSignedInSeeReturn(relayed, sock);
+          else await finish(relayed, sock);
+        } else if (msg.t === 'close') fail(new Error('Pairing was declined in bWalletX'));
       });
 
     const open = (first: boolean) => {
@@ -929,7 +953,8 @@ export async function resumeReturnedPairing(opts: ResumeOptions = {}): Promise<R
       if (pending && (await pending.sealer.open(f))) return end(pending); // a relay frame under the fragment's key
       if (!sealer) return;
       const msg = await sealer.open(f);
-      if (msg?.t === 'ready') end({ sealer, wk, msg });
+      // Over the relay: never a sign-in signature (CTO 22 Nov 2026), only "paired".
+      if (msg?.t === 'ready') end({ sealer, wk, msg: { ...msg, login: undefined } });
     });
   });
   if (!got) return null;

@@ -32,6 +32,10 @@ needed a second trip to the wallet that the user never made.
   sent one is never re-sent. A pairing whose return another tab took stops (`RETURNED_IN_ANOTHER_TAB`) instead of
   finishing a second sign-in. Return entries (they hold the pairing key) are deleted once taken, and stale ones (over
   10 minutes) are removed whenever a pairing starts or resumes.
+- **The sign-in signature travels only in the return fragment** (CTO 22 Nov 2026). Over the relay bWalletX sends
+  `ready` with `ls: 1` ("signed in, see the return") and no signature; a site ignores any `login` that arrives over the
+  relay. After `ls` the page waits for the return (`returnWaitMs`, default 20 s), then pairs without it and asks for the
+  sign-in the usual way. README "Sign in on the same phone" lists which threat each piece stops.
 - **One trip to the wallet.** For phone pairing the challenge is fetched first and folded into the link (`ln`, `lx`;
   `PairingOptions.login`, `ConnectOptions.login`): bWalletX shows one card, "Connect and sign in", and its `ready`
   carries the signature. The paired wallet answers that sign-in itself (`PairedWallet.signedIn`). Only the standard
