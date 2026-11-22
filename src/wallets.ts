@@ -60,6 +60,11 @@ export interface WalletOption {
 export interface ConnectOptions {
   /** Ask for the identity key now. Default true. */
   identity?: boolean;
+  /**
+   * (0.9.0) Phone pairing: the sign-in challenge to fold into Connect (PairingOptions.login). On the same phone this
+   * also skips a stored pairing, so the tap opens bWalletX (a stored pairing can't bring the app to the front).
+   */
+  login?: { nonce: string; expiresAt: number | string };
 }
 
 async function brc100Connected(wallet: WalletInterface, o: Pick<WalletOption, 'id' | 'kind'>, c: ConnectOptions = {}): Promise<ConnectedWallet> {
@@ -98,8 +103,13 @@ export function pairingOption(pairing: PairingOptions | (() => PairingOptions)):
     isBwalletX: true,
     substrate: 'pairing',
     async connect(c) {
-      const p = typeof pairing === 'function' ? pairing() : pairing;
-      const w = (await restorePairing(p)) ?? (await pairBwalletX(p));
+      const p0 = typeof pairing === 'function' ? pairing() : pairing;
+      const p = c?.login ? { ...p0, login: c.login } : p0;
+      // Same phone with a sign-in to fold: always a fresh link. It opens bWalletX with Connect and the sign-in on one
+      // card and comes back; a stored pairing would leave the request waiting in an app that is in the background.
+      const fresh = !!(p.returnTo && c?.login);
+      const w = (fresh ? null : await restorePairing(p)) ?? (await pairBwalletX(p));
+      if (w.signedIn) return { wallet: w, payer: w, identityKey: w.signedIn.identityKey, optionId: opt.id, kind: opt.kind };
       return brc100Connected(w, opt, c);
     },
   };

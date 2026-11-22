@@ -197,3 +197,4 @@ export type { LinkCallbacks, LinkResult, SignInOrLinkOptions, SignInOrLinkResult
 export * from './access.js';
 export { createAccessChallenge, verifyAccess, verifyHoldingProof, checkTokenHolding, oneSatResolver, bitSignResolver } from './access-server.js';
 export type { AccessResolver, IdentityStatus, OneSatResolverOptions, BitSignResolverOptions, CreateAccessChallengeOptions, AccessChallengeResponse, VerifyAccessOptions, AccessGrant } from './access-server.js';
+

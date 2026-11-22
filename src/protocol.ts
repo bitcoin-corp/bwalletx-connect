@@ -21,13 +21,61 @@ export const QR_LIFETIME_S = 120;
 export type Role = 'site' | 'wallet';
 export type WalletInfo = { name: string; icon?: string; rdns: string };
 
-export type PairLink = { v: string; r: string; c: string; k: string; o: string; e: number };
+/**
+ * The pairing link. Optional same-phone fields (0.9.0; older wallets ignore them, bWalletX 5.2.61+ uses them):
+ *   ret  where the wallet sends the user back after Connect (https, exactly the origin `o`; connect sends its root);
+ *   rid  a one-time request id (16 random bytes, base64url) that ties the return to the pairing saved in this browser;
+ *   b    the browser that opened the link (safari, chrome, firefox, samsung, edge, brave, other);
+ *   ln, lx  the sign-in challenge's nonce and expiry (ISO), so Connect and the sign-in are ONE approval in the wallet.
+ */
+export type PairLink = {
+  v: string;
+  r: string;
+  c: string;
+  k: string;
+  o: string;
+  e: number;
+  ret?: string;
+  rid?: string;
+  b?: BrowserHint;
+  ln?: string;
+  lx?: string;
+};
+
+export const BROWSER_HINTS = ['safari', 'chrome', 'firefox', 'samsung', 'edge', 'brave', 'opera', 'other'] as const;
+export type BrowserHint = (typeof BROWSER_HINTS)[number];
+export const RID_RE = /^[A-Za-z0-9_-]{16,64}$/;
+export const LOGIN_NONCE_RE = /^[A-Za-z0-9_-]{8,128}$/;
+export const LOGIN_EXPIRY_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+export const RET_MAX_BYTES = 512;
+
+/** The browser this page runs in, as a `b` hint for the wallet's return (it can't tell from the app). */
+export function browserHint(ua: string, isBrave = false): BrowserHint {
+  if (isBrave) return 'brave';
+  if (/SamsungBrowser/i.test(ua)) return 'samsung';
+  if (/EdgiOS|EdgA|Edg\//i.test(ua)) return 'edge';
+  if (/OPR\/|OPT\/|Opera/i.test(ua)) return 'opera';
+  if (/FxiOS|Firefox/i.test(ua)) return 'firefox';
+  if (/CriOS|Chrome/i.test(ua)) return 'chrome';
+  if (/Safari/i.test(ua)) return 'safari';
+  return 'other';
+}
+
+/** A fresh one-time request id. */
+export const newRequestId = () => b64url(crypto.getRandomValues(new Uint8Array(16)));
+
+/**
+ * The sign-in a wallet folded into Connect (identity key and DER signature, hex). It travels ONLY in the return
+ * fragment's sealed ready (CTO 22 Nov 2026), never over the relay: the relay's ready says `ls: 1` ("signed in, see the
+ * return") instead. A site ignores `login` on a ready that came over the relay.
+ */
+export type ReadyLogin = { k: string; sig: string };
 
 /** Plaintext messages inside encrypted frames. */
 export type PairMessage =
   | { t: 'req'; id: string; action: string; params: unknown }
   | { t: 'res'; id: string; result?: unknown; error?: { code: string; message: string } }
-  | { t: 'ready' }
+  | { t: 'ready'; wcv?: 2; nc?: string; login?: ReadyLogin; ls?: 1 }
   | { t: 'ping' }
   | { t: 'close'; reason: string };
 
@@ -59,6 +107,7 @@ export const newChannel = () => b64url(crypto.getRandomValues(new Uint8Array(16)
 
 export function pairUrl(link: PairLink): string {
   const q = new URLSearchParams({ v: link.v, r: link.r, c: link.c, k: link.k, o: link.o, e: String(link.e) });
+  for (const f of ['ret', 'rid', 'b', 'ln', 'lx'] as const) if (link[f]) q.set(f, link[f]!);
   return `https://${PAIR_HOST}/pair?${q}`;
 }
 
@@ -78,6 +127,16 @@ export function parsePairUrl(text: string, nowS = Math.floor(Date.now() / 1000))
   const o = new URL(link.o);
   if (o.origin !== link.o) throw new Error('Bad pairing code');
   if (!Number.isFinite(link.e) || link.e < nowS) throw new Error('This code has expired. Ask the site for a new one.');
+  // Optional same-phone fields: malformed ones are dropped (the link still pairs), never fatal.
+  const ret = g('ret');
+  if (ret && ret.length <= RET_MAX_BYTES) link.ret = ret;
+  if (RID_RE.test(g('rid'))) link.rid = g('rid');
+  const b = g('b').toLowerCase();
+  if ((BROWSER_HINTS as readonly string[]).includes(b)) link.b = b as BrowserHint;
+  if (LOGIN_NONCE_RE.test(g('ln')) && LOGIN_EXPIRY_RE.test(g('lx'))) {
+    link.ln = g('ln');
+    link.lx = g('lx');
+  }
   return link;
 }
 
@@ -184,3 +243,59 @@ export class Sealer {
 
 export const isSealed = (x: unknown): x is SealedFrame =>
   !!x && typeof x === 'object' && 'd' in x && 'n' in x && 's' in x;
+
+/**
+ * The wallet's return (0.9.0, bWalletX 5.2.61+): it opens `<ret>#bwx=ok&rid=<rid>&wk=<its pairing key>&f=<frame>`,
+ * where `f` is its sealed `ready` (base64url of the frame's JSON). The fragment is a CLAIM, not proof: the link carries
+ * the channel, the site's pairing key and the rid, so anyone holding the link can build one with their own key. A
+ * page uses it only once the relay's wallet says hello with the same `wk` (or a relay frame opens under it); it then
+ * saves the tab from waiting for frames the relay already handed to the frozen tab.
+ * A wallet without `wk`/`f` (older builds that return) sends `#bwx=ok&rid=<rid>` only; the relay carries the rest.
+ */
+export type ReturnFragment = { rid: string; wk?: string; f?: SealedFrame };
+
+export function parseReturnFragment(hash: string): ReturnFragment | null {
+  const q = new URLSearchParams(hash.replace(/^#/, ''));
+  if (q.get('bwx') !== 'ok') return null;
+  const rid = q.get('rid') ?? '';
+  if (!RID_RE.test(rid)) return null;
+  const out: ReturnFragment = { rid };
+  const wk = q.get('wk') ?? '';
+  const f = q.get('f') ?? '';
+  if (/^0[23][0-9a-f]{64}$/i.test(wk) && f && f.length <= 8192) {
+    try {
+      const frame = JSON.parse(new TextDecoder().decode(fromB64url(f))) as unknown;
+      if (isSealed(frame)) Object.assign(out, { wk, f: frame });
+    } catch {
+      /* no frame: the relay carries the ready */
+    }
+  }
+  return out;
+}
+
+/** What the wallet puts after `#` (exported for wallets and tests). */
+export function returnFragment(rid: string, wk?: string, f?: SealedFrame): string {
+  const q = new URLSearchParams({ bwx: 'ok', rid });
+  if (wk && f) {
+    q.set('wk', wk);
+    q.set('f', b64url(new TextEncoder().encode(JSON.stringify(f))));
+  }
+  return q.toString();
+}
+
+/**
+ * The sign-in text, exactly as createChallenge (server.ts loginMessage) and bWalletX (pairLogin.ts) build it, with
+ * the expiry as its ISO string. A challenge folded into a pairing link must be this text: the wallet rebuilds it from
+ * the link's `ln`/`lx` and the relay's origin, and signs only that.
+ */
+export const loginMessageFor = (origin: string, nonce: string, expiresIso: string) =>
+  [
+    `Sign in to ${new URL(origin).host} with bWallet`,
+    '',
+    'This proves you hold this wallet. It does not spend anything.',
+    '',
+    `Origin: ${origin}`,
+    `Nonce: ${nonce}`,
+    `Expires: ${expiresIso}`,
+  ].join('\n');
+

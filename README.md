@@ -291,6 +291,29 @@ Without `challenge-url`, `href` or `authorize-url` the button only fires `bwalle
 
 SVG files, and an HTML/CSS version with no JavaScript, are in `assets/`. All variants: `examples/buttons.html`. Placement, sizes and do/don't: [BRAND.md](./BRAND.md). The names and logo are not MIT licensed: [TRADEMARKS.md](./TRADEMARKS.md).
 
+## Sign in on the same phone (0.9.0)
+
+On a phone, "Sign in with bWalletX" opens the bWalletX app, which signs in on its Connect card and sends the user back
+to your site. Needs bWalletX 5.2.61+. The provider and `<bwalletx-signin>` do all of it with no extra setup: no keys,
+no new routes. `pairBwalletX` and `resumeReturnedPairing` are the parts.
+
+**Load connect before any third-party script** (analytics, session replay, history sync). The wallet's return lands as
+`#bwx=ok&…`; connect removes it from the address bar the moment its module loads, and on every `hashchange`, so a
+script that loads later never reads it.
+
+What each piece stops:
+
+| Piece | Stops |
+| ----- | ----- |
+| Reconnect on `visibilitychange`/`pageshow`, re-send on `ready` | The sign-in hanging because iOS froze the tab and killed its socket. |
+| Only reads are re-sent (not even the sign-in signature); an unsent call goes once | A second payment sheet after a reconnect (bWalletX's answered-id record is in memory). |
+| The wallet returns only to the ROOT of the exact origin the relay saw; the page is kept in this browser | A link sending the user to a path or subdomain someone else chose; OAuth codes or tokens leaking into the link. |
+| The sign-in signature travels ONLY in the return fragment, never over the relay | A script that claims your origin to the relay (it can set any `Origin` header) taking the signature: the wallet opens the fragment in the user's own browser, at that origin. |
+| The fragment counts only after the relay's wallet says hello with the same key; it is taken once, then deleted | Someone holding the link forging a fragment that pairs your page with their wallet or signs the user into their account. |
+| The fragment is stripped at module load and on `hashchange` | Analytics, session replay or history sync reading a fragment before it is used. |
+| Every sheet sent over the relay says "a site that claims to be <host>" | Users trusting a host name the relay can't vouch for. (No origin proofs: a proof route can't tell a browser from a script.) |
+| A card expires with its code and signs with the account it opened under | A stale card, or a sign-in under an account switched to meanwhile. |
+
 ## Server
 
 ```ts

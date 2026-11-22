@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.9.0 (22 Nov 2026)
+
+Sign in with bWalletX on a phone, on the same phone (P0, 22 Nov 2026: "it has never worked"). Three gaps, all on one
+device: the site's tab is frozen while the user is in bWalletX, the wallet never sent the user back, and the sign-in
+needed a second trip to the wallet that the user never made.
+
+- **The relay socket dying is not a failure.** iOS kills a frozen tab's socket. Before, `pairBwalletX` rejected ("The
+  connection to bWalletX closed before pairing finished") and every waiting call rejected ("The connection to bWalletX
+  closed"), so the page sat on the code. Now the socket is reopened when the page is back (`visibilitychange`,
+  `pageshow`, `online`, `focus`, `hashchange`; new `onWake` option, `onPageWake` export), the relay's queued hello and
+  ready finish the pairing, and unanswered calls are re-sent with the same ids when the wallet says `ready` again
+  (bWalletX answers a repeated id from its stored answer, never twice).
+- **Same phone: back to the site.** `pairingModal()` on a phone sets `returnTo` (this page's origin + path; never its
+  query or fragment). The link carries `ret` (this origin's root only), a one-time `rid` and the browser `b`; the
+  pairing and the page are saved in localStorage under the rid. bWalletX (5.2.61+) opens `<root>#bwx=ok&rid=…&wk=…&f=…`
+  after Connect, usually in a NEW tab. **`resumeReturnedPairing()`** (new) finishes the pairing there. The fragment is
+  only a claim (anyone with the link can forge one): its `ready` is used once the relay's wallet says hello with the
+  same key. It returns the starting `page`; the provider and `<bwalletx-signin>` post the sign-in to `verifyUrl` and
+  go back to it. The tab that started it stops (`RETURNED_IN_ANOTHER_TAB`) and re-reads `sessionUrl`.
+- **Only reads are re-sent** after a reconnect (not even the sign-in signature; review 4) (`safeToResend`). A spend or other acting call is sent
+  once: it waits for its own answer and times out as `NO_ANSWER_MAYBE_SENT` ("check bWalletX before you try again").
+- Only a call that actually reached a socket counts as sent: an unsent spend goes out once when the link is back; a
+  sent one is never re-sent. A pairing whose return another tab took stops (`RETURNED_IN_ANOTHER_TAB`) instead of
+  finishing a second sign-in. Return entries (they hold the pairing key) are deleted once taken, and stale ones (over
+  10 minutes) are removed whenever a pairing starts or resumes.
+- **No origin proofs** (review 3, 22 Nov 2026): a proof route can't tell a browser from a script, so it is gone (no
+  keys, no routes). bWalletX returns to the root of the relay-seen origin; every sheet over the relay keeps "a site that
+  claims to be". **The return fragment is stripped at module load** and on `hashchange` (`hasReturnFragment()`): load
+  connect before third-party scripts.
+- **The sign-in signature travels only in the return fragment** (CTO 22 Nov 2026). Over the relay bWalletX sends
+  `ready` with `ls: 1` ("signed in, see the return") and no signature; a site ignores any `login` that arrives over the
+  relay. After `ls` the page waits for the return (`returnWaitMs`, default 20 s), then pairs without it and asks for the
+  sign-in the usual way. README "Sign in on the same phone" lists which threat each piece stops.
+- **One trip to the wallet.** For phone pairing the challenge is fetched first and folded into the link (`ln`, `lx`;
+  `PairingOptions.login`, `ConnectOptions.login`): bWalletX shows one card, "Connect and sign in", and its `ready`
+  carries the signature. The paired wallet answers that sign-in itself (`PairedWallet.signedIn`). Only the standard
+  `createChallenge` text is folded (`foldableLogin`); a custom challenge goes the usual way. With an older bWalletX the
+  modal says to approve the sign-in in bWalletX and links `bwalletx://open`.
+- **The provider and the element re-read `sessionUrl` when the page comes back** while signed out (no wallet call).
+- Cancel on the site sends the wallet a sealed `close`, so its Connect card doesn't stay up.
+
 ## 0.8.0 (unreleased)
 
 `@bsv/sdk` 4.x as connect's own dependency, on top of 0.7.0. (This work was first prepared as "0.6.0" on a branch from 0.5.5; that number was already used for the auto-connect line below, and npm's `latest` is 0.7.0, so it ships as 0.8.0.)

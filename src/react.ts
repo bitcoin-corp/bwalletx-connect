@@ -20,7 +20,7 @@ import {
   type ReactNode,
 } from 'react';
 import type { WalletInterface } from '@bsv/sdk';
-import { clearPairing } from './pair.js';
+import { clearPairing, hasReturnFragment, onPageWake, resumeReturnedPairing } from './pair.js';
 import { declareWalletTheme } from './theme.js';
 import { runConnect, runSilentMetanet } from './connect-flow.js';
 import { metanetOffered, silentAttemptUsed, warnIfNoLogout, METANET_TYPE } from './metanet.js';
@@ -30,7 +30,7 @@ import {
   type AttemptHook, type RememberedWallet,
 } from './choice.js';
 import { discoverWallets, type ConnectedWallet, type WalletOption } from './wallets.js';
-import { accountLabel, avatarUrlFor, lookupPaymail, signInErrorText } from './account.js';
+import { accountLabel, avatarUrlFor, lookupPaymail, rememberIdentity, signInErrorText } from './account.js';
 import { PaymentError, buyToken, pay, tip, type BuyTokenRequest, type PayOptions, type PayRequest, type PayResult } from './pay.js';
 import { defineBwalletxSignin, type SigninBrand, type SigninLabel, type SigninMode, type SigninSize, type SigninState, type SigninTheme } from './element.js';
 
@@ -368,6 +368,75 @@ export function BwalletXProvider(p: BwalletXProviderProps): ReactElement {
     return () => declareWalletTheme(null);
   }, [themeOn, p.theme]);
 
+  // 0.9.0: the page is back (iOS froze it while the user was in bWalletX; another tab may have signed in meanwhile):
+  // re-read the session, quietly, when not signed in and nothing is in flight. No wallet call.
+  const recheckSession = useRef<(() => void) | null>(null);
+  const statusNow = useRef(state.status);
+  statusNow.current = state.status;
+  const signedInNow = useRef(state.signedIn);
+  signedInNow.current = state.signedIn;
+  useEffect(() => {
+    const url = p.sessionUrl;
+    if (!url) return;
+    let live = true;
+    const recheck = () => {
+      if (!live || signedInNow.current || statusNow.current === 'connecting' || statusNow.current === 'restoring') return;
+      fetch(url, { credentials: 'same-origin' })
+        .then((r) => r.json())
+        .then((j: { identityKey?: string | null; handle?: string; paymail?: string }) => {
+          if (!live || !j.identityKey || signedInNow.current) return;
+          setState((s) => ({ ...s, status: 'connected', identityKey: j.identityKey!, handle: j.handle ?? null, paymail: j.paymail ?? null, signedIn: true }));
+        })
+        .catch(() => undefined);
+    };
+    recheckSession.current = recheck;
+    const off = onPageWake(recheck);
+    return () => {
+      live = false;
+      off();
+      recheckSession.current = null;
+    };
+  }, [p.sessionUrl]);
+
+  // 0.9.0: bWalletX sent the user back here after Connect on the same phone (#bwx=ok&rid=…, often a NEW tab): finish
+  // the pairing saved for that rid and post the sign-in folded into Connect to verifyUrl.
+  useEffect(() => {
+    if (!hasReturnFragment()) return;
+    let live = true;
+    void resumeReturnedPairing()
+      .then(async (r) => {
+        if (!live || !r) return;
+        const c = props.current;
+        let verified: Record<string, unknown> = {};
+        if (r.login && c.verifyUrl) {
+          verified = await postJson(c.verifyUrl, { identityKey: r.login.identityKey, nonce: r.login.nonce, signature: r.login.signature });
+          rememberIdentity(r.login.identityKey);
+        }
+        if (!live) return;
+        payer.current = r.wallet;
+        setState((s) => ({
+          ...s,
+          status: 'connected',
+          identityKey: r.login?.identityKey ?? s.identityKey,
+          handle: (verified.handle as string | undefined) ?? s.handle,
+          paymail: (verified.paymail as string | undefined) ?? s.paymail,
+          wallet: r.wallet,
+          walletId: 'bwalletx-pairing',
+          walletType: 'bwalletx',
+          signedIn: !!(r.login && c.verifyUrl) || s.signedIn,
+          error: null,
+        }));
+        // The wallet returns to this origin's root (review 22 Nov 2026); go back to the page the sign-in started on.
+        if (r.page && typeof location !== 'undefined' && `${location.origin}${location.pathname}` !== r.page) location.replace(r.page);
+      })
+      .catch((e) => {
+        if (live) fail(e);
+      });
+    return () => {
+      live = false;
+    };
+  }, [fail]);
+
   useEffect(() => {
     const url = p.sessionUrl;
     if (!url) return;
@@ -453,6 +522,12 @@ export function BwalletXProvider(p: BwalletXProviderProps): ReactElement {
         });
         return { ...cw, identityKey: r.identityKey, handle: r.handle ?? undefined, paymail: r.paymail ?? undefined };
       } catch (e) {
+        // 0.9.0: bWalletX returned to a NEW tab, which finished the sign-in: pick up the session here.
+        if ((e as { code?: string })?.code === 'RETURNED_IN_ANOTHER_TAB') {
+          setState((s) => ({ ...s, status: s.identityKey && s.signedIn ? 'connected' : 'idle' }));
+          setTimeout(() => recheckSession.current?.(), 50); // after the idle state renders
+          return null;
+        }
         if ((e as Error)?.message === 'cancelled') {
           setState((s) => ({ ...s, status: s.identityKey && s.signedIn ? 'connected' : 'idle' }));
           return null;

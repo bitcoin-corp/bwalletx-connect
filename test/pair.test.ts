@@ -81,8 +81,10 @@ describe('pairing survives a reload', () => {
     expect(publicKey).toBe(root.toPublicKey().toString());
     expect(phone!.requests).toEqual(['getPublicKey', 'getPublicKey']);
     const after = JSON.parse(storage.m.get('bwalletx.connect.pairing.v1')!);
-    expect(after.sent).toBe(2);
-    expect(after.lastSeen).toBe(3); // ready, res, res
+    // 0.9.0: the phone says hello and ready when the site rejoins (as bWalletX does), and the site re-sends what is
+    // unanswered with the same id; the phone answers a repeated id from its stored answer (requests above: 2, not 3).
+    expect(after.sent).toBeGreaterThanOrEqual(2);
+    expect(after.lastSeen).toBeGreaterThanOrEqual(3); // ready, res, res (and the rejoin's ready)
 
     await again!.forget();
     expect(storage.m.size).toBe(0);

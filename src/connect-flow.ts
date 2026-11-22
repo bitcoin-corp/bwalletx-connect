@@ -3,8 +3,9 @@
  * chooser otherwise, or when the user asked for "Other wallets"), open it, and sign in with ONE wallet sheet.
  */
 import { rememberIdentity, rememberedIdentity } from './account.js';
-import { signInAndVerify, type Challenge } from './signin.js';
+import { foldableLogin, signInAndVerify, type Challenge } from './signin.js';
 import type { ConnectedWallet, Substrate, WalletOption } from './wallets.js';
+import type { PairedWallet } from './pair.js';
 import {
   isKnownIdentityKey, metanetOffered, metanetOption, rememberKnownIdentityKey, trySilentMetanet, METANET_OPTION_ID, type MetanetOptions,
 } from './metanet.js';
@@ -102,11 +103,40 @@ export async function runConnect(o: ConnectFlowOptions): Promise<ConnectFlowResu
   }
 }
 
+/**
+ * (0.9.0) Open the chosen wallet for a sign-in. Phone pairing gets the challenge FIRST and folds it into Connect, so on
+ * the same phone bWalletX opens once (Connect and sign in on one card) and returns; the paired wallet then answers the
+ * sign-in itself. `challenge` hands that same challenge to signInAndVerify once, and fetches a fresh one otherwise.
+ */
+export async function openForSignIn(
+  choice: WalletOption,
+  signIn: boolean,
+  fetchChallenge: () => Promise<Challenge>,
+  o: { challengeNeedsIdentityKey?: boolean; origin?: string } = {},
+): Promise<{ cw: ConnectedWallet; challenge: (identityKey?: string) => Promise<Challenge> | null }> {
+  let pre: Challenge | null = null;
+  const origin = o.origin ?? (typeof location !== 'undefined' ? location.origin : '');
+  if (signIn && choice.kind === 'pairing' && !o.challengeNeedsIdentityKey && origin) pre = await fetchChallenge().catch(() => null);
+  const login = pre ? foldableLogin(pre, origin) : undefined;
+  // Signing in: open the wallet WITHOUT asking for the key; the key comes with the signature, in one sheet.
+  const cw = await choice.connect(signIn ? { identity: false, ...(login && { login }) } : undefined);
+  let folded = (cw.wallet as Partial<PairedWallet> | null)?.signedIn ? pre : null;
+  return {
+    cw,
+    challenge: () => {
+      const c = folded;
+      folded = null;
+      return c ? Promise.resolve(c) : null;
+    },
+  };
+}
+
 /** Open the chosen wallet and sign in (one wallet sheet), remember the pick, report the attempt. */
 async function finish(o: ConnectFlowOptions, choice: WalletOption, reason: ChoiceReason, started: number): Promise<ConnectFlowResult> {
   const signIn = !!(o.challengeUrl && o.verifyUrl) && choice.kind !== 'handcash';
-  // Signing in: open the wallet WITHOUT asking for the key; the key comes with the signature, in one sheet.
-  const cw = await choice.connect(signIn ? { identity: false } : undefined);
+  const { cw, challenge: folded } = await openForSignIn(choice, signIn, () => o.post(o.challengeUrl!, {}) as unknown as Promise<Challenge>, {
+    challengeNeedsIdentityKey: o.challengeNeedsIdentityKey,
+  });
   let handle = cw.handle ?? null;
   let paymail = cw.paymail ?? null;
   let identityKey = cw.identityKey;
@@ -118,9 +148,9 @@ async function finish(o: ConnectFlowOptions, choice: WalletOption, reason: Choic
       // Metanet's connect() just checked the lock: don't ask again (rule 7, the minimum).
       skipWaitForAuthentication: choice.id === METANET_OPTION_ID,
       // The key that signed in here last time: a repeat sign-in is then the signature alone.
-      identityKeyHint: rememberedIdentity(),
+      identityKeyHint: cw.identityKey ? undefined : rememberedIdentity(),
       challengeNeedsIdentityKey: o.challengeNeedsIdentityKey,
-      challenge: (key) => o.post(o.challengeUrl!, key ? { identityKey: key } : {}) as unknown as Promise<Challenge>,
+      challenge: (key) => folded(key) ?? (o.post(o.challengeUrl!, key ? { identityKey: key } : {}) as unknown as Promise<Challenge>),
       verify: (r) => o.post(o.verifyUrl!, { identityKey: r.identityKey, nonce: r.nonce, signature: r.signature }),
     });
     rememberIdentity(result.identityKey);

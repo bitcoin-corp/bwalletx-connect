@@ -103,9 +103,28 @@ export function pairingModal(o: PairingModalOptions = {}): PairingOptions & { cl
     ui = null;
   };
   ac.signal.addEventListener('abort', close);
+  // 0.9.0, same phone: ask bWalletX to send the user back to this page after Connect (it can't otherwise: Safari and
+  // Chrome never come back on their own), and say which browser to return to.
+  const sameDevice = o.mode === 'app' || ((o.mode ?? 'auto') === 'auto' && isTouchDevice());
+  // origin + path only: a query (OAuth codes, tokens) or fragment never goes into a pairing link (review 22 Nov 2026).
+  const here = typeof location !== 'undefined' ? `${location.origin}${location.pathname}` : '';
   return {
     signal: ac.signal,
     close,
+    ...(sameDevice && here && { returnTo: here }),
+    onPaired() {
+      // Connected. With an older bWalletX the sign-in is a second approval there: say so, and offer the way back.
+      const p = ui?.box.querySelector('p');
+      if (!p || !sameDevice) return;
+      p.textContent = 'Connected. If bWalletX asks you to approve the sign-in, approve it there, then come back to this page.';
+      const stack = ui?.box.querySelector('.bwx-stack');
+      const open = stack?.querySelector('a.bwx-primary') as HTMLAnchorElement | null;
+      if (open) {
+        // Brings the app to the front without starting a new pairing (bwalletx:// opens the app; nothing to parse).
+        open.href = 'bwalletx://open';
+        open.textContent = 'Open bWalletX to approve';
+      }
+    },
     onLink(link) {
       if (typeof document === 'undefined') return;
       close();
