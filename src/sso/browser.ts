@@ -54,6 +54,8 @@ export interface BwxSsoOptions {
    * back) whether the visitor is already signed in to another b*X site. Once per tab; again after an hour. Default true.
    */
   silent?: boolean;
+  /** Where to land after signing in when the page has no ?returnTo= (e.g. "/dashboard" on a sign-in page). Default: this page. */
+  returnTo?: string;
   /** "Your page" link in the chip menu (e.g. "/dashboard"). Hidden when unset. */
   accountUrl?: string;
   accountLabel?: string;
@@ -118,10 +120,11 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: s
 const shortKey = (k: string) => `${k.slice(0, 6)}…${k.slice(-4)}`;
 const displayName = (s: SsoSessionInfo) => s.paymail || (s.handle ? s.handle : s.identityKey ? shortKey(s.identityKey) : 'Signed in');
 
-/** returnTo for a sign-in: ?returnTo= on this page (gates send visitors with it), else this page. */
-function currentReturnTo(): string {
+/** returnTo for a sign-in: ?returnTo= on this page (gates send visitors with it), else the default, else this page. */
+function currentReturnTo(fallback?: string): string {
   const q = new URLSearchParams(location.search).get('returnTo');
   if (q) return safeReturnTo(q, '/');
+  if (fallback) return safeReturnTo(fallback, '/');
   const u = new URL(location.href);
   u.searchParams.delete('sso_error');
   return safeReturnTo(u.pathname + u.search + u.hash, '/');
@@ -157,7 +160,7 @@ export function bwxSso(opts: BwxSsoOptions): BwxSso {
   async function signIn(o: { returnTo?: string; prompt?: 'none' | 'login' } = {}) {
     const state = randomToken(32);
     const verifier = randomToken(48);
-    const returnTo = safeReturnTo(o.returnTo ?? currentReturnTo(), '/');
+    const returnTo = safeReturnTo(o.returnTo ?? currentReturnTo(opts.returnTo), '/');
     const secure = location.protocol === 'https:' ? '; Secure' : '';
     // Readable by your server at /sso/callback; single use, 10 minutes, this attempt only.
     document.cookie = `${txCookieName(state)}=${encodeTx({ state, verifier, returnTo })}; Path=/; Max-Age=600; SameSite=Lax${secure}`;

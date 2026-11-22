@@ -27,7 +27,8 @@ import {
   type RiskTier,
 } from './shared.js';
 
-export { SsoError } from './jwt.js';
+export { SsoError, verifyHubToken, clearJwksCache } from './jwt.js';
+export type { VerifyHubTokenOptions } from './jwt.js';
 export type { HubClaims } from './jwt.js';
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
