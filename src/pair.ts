@@ -140,6 +140,12 @@ interface StoredPairing {
    * so every reconnect sends that claim's digest as `wc` and a channel the relay re-creates stays bound to the phone.
    */
   wv?: 2;
+  /**
+   * (0.9.2) A site claim we are about to rotate to: saved BEFORE the socket that brings it opens, because the relay pins
+   * it at the upgrade, and a page that dies before `onopen` would otherwise be left holding a claim the channel no
+   * longer accepts. Tried (without `wc`) after `sc`; becomes `sc` once a socket with it opens.
+   */
+  sn?: string;
 }
 
 /** A pairing in progress, saved for the tab the wallet returns to (keyed by the link's one-time `rid`). */
@@ -308,6 +314,12 @@ export function pruneReturns(store: PairStorage | null | undefined, now = Date.n
   }
 }
 
+const CLAIM_RE = /^[A-Za-z0-9_-]{22,64}$/;
+
+/** (0.9.2) The code bWalletX itself answers with when a pairing has ended; sites already handle it. */
+const REPAIR_NEEDED = 'REPAIR_NEEDED';
+const PROBE_MS = 10_000;
+
 function parseStored(raw: string | null): StoredPairing | null {
   if (!raw) return null;
   try {
@@ -319,8 +331,11 @@ function parseStored(raw: string | null): StoredPairing | null {
     if (typeof p.s !== 'string' || !/^[0-9a-f]{64}$/i.test(p.s)) return null;
     if (typeof p.k !== 'string' || !/^0[23][0-9a-f]{64}$/i.test(p.k)) return null;
     if (!n(p.sent) || !n(p.lastSeen) || !n(p.pairedAt)) return null;
-    if (p.sc !== undefined && (typeof p.sc !== 'string' || !/^[A-Za-z0-9_-]{22,64}$/.test(p.sc))) return null;
-    if (p.wv !== undefined && p.wv !== 2) return null;
+    if (p.sc !== undefined && (typeof p.sc !== 'string' || !CLAIM_RE.test(p.sc))) return null;
+    // Review of #24 (finding 4): an unknown wallet claim version is ignored (treated as v1), not a reason to drop the
+    // pairing; so is a malformed pending claim.
+    if (p.wv !== undefined && p.wv !== 2) delete p.wv;
+    if (p.sn !== undefined && (typeof p.sn !== 'string' || !CLAIM_RE.test(p.sn))) delete p.sn;
     return p as StoredPairing;
   } catch {
     return null;
@@ -464,39 +479,112 @@ class Link {
   }
 
   private async reopen() {
+    // Another tab of this origin may have rotated the site claim (or learned wv) since we loaded: start from the stored
+    // claims when they are this pairing's, so we neither present a stale claim nor write one back over the new one.
+    const saved = parseStored(await Promise.resolve(this.storage.getItem(this.key)).catch(() => null));
+    if (this.forgotten) throw new Error('This pairing was removed. Pair again.');
+    if (saved && saved.c === this.p.c && saved.s === this.p.s && saved.k === this.p.k) {
+      const { sn: _sn, ...mine } = this.p;
+      this.p = { ...mine, sc: saved.sc ?? this.p.sc, ...(saved.sn && { sn: saved.sn }), ...((saved.wv === 2 || this.p.wv === 2) && { wv: 2 as const }) };
+    }
     // Pairings stored before site claims get one now; the relay binds it on this connect.
     if (!this.p.sc) {
       this.p = { ...this.p, sc: newClaim() };
       this.persist();
     }
     const key = PrivateKey.fromHex(this.p.s);
-    if (this.p.wv === 2) {
-      // Wallet claim v2 (0.9.2): always name the session claim's digest. On a live channel already bound to it the
-      // relay changes nothing; a channel it lost (31-day idle drop, lost state file) is re-created bound to it, so
-      // only the paired phone gets the wallet role. After the relay's legacy cutoff (30 Nov 2026) a channel can't be
-      // re-created without `wc` at all.
-      const wc = await claimDigest(sessionWalletClaim(key, this.p.k, this.p.c));
-      return this.openSite(this.p.sc!, wc);
-    }
-    // A v1 pairing (stored before 0.9.2, or the wallet never named its session claim): open WITHOUT `wc` first. The
-    // QR-bound claim's digest must never reach a live channel: the relay would re-bind a session-bound wallet role
-    // back to it, and anyone who saw the QR could then evict the phone.
-    try {
-      return await this.openSite(this.p.sc!);
-    } catch (e) {
-      if (this.forgotten) throw e;
-      // Refused (a browser can't say why). Once, re-create the channel bound to the QR claim, the only wallet claim a
-      // v1 pairing knows, under a FRESH site claim: if the channel does exist, the relay refuses that claim ("role
-      // claimed") before it looks at `wc`, so the QR digest can only ever open a channel the relay no longer has. The
-      // new claim replaces ours only once that socket is open.
-      const sc = newClaim();
-      const wc = await claimDigest(await walletClaimFor(this.p.c, key.toPublicKey().toString()));
-      if (this.forgotten) throw e;
-      return this.openSite(sc, wc, () => {
-        this.p = { ...this.p, sc };
-        this.persist();
-      });
-    }
+    const v2 = this.p.wv === 2;
+    // Wallet claim v2 (0.9.2): always name the session claim's digest. On a live channel already bound to it the relay
+    // changes nothing; a channel it lost (31-day idle drop, lost state file) is re-created bound to it, so only the
+    // paired phone gets the wallet role. After the relay's legacy cutoff (30 Nov 2026) a channel can't be re-created
+    // without `wc` at all.
+    // A v1 pairing (stored before 0.9.2, or the wallet never named its session claim) opens WITHOUT `wc`: the QR-bound
+    // claim's digest must never reach a live channel, or the relay would re-bind a session-bound wallet role back to it
+    // and anyone who saw the QR could then evict the phone.
+    const wc = v2 ? await claimDigest(sessionWalletClaim(key, this.p.k, this.p.c)) : undefined;
+    const attempt = async (claim: string, withWc?: string) => {
+      if (this.forgotten) throw new Error('This pairing was removed. Pair again.');
+      try {
+        await this.openSite(claim, withWc, () => this.useClaim(claim));
+        return true;
+      } catch {
+        if (this.forgotten) throw new Error('This pairing was removed. Pair again.');
+        return false;
+      }
+    };
+    // v1 only: re-create the channel bound to the QR claim, the only wallet claim a v1 pairing knows, under a FRESH site
+    // claim. That is safe on a channel that still exists, because of two relay checks (relay.mjs claimOk and attach):
+    //  - claimOk refuses a claim the channel doesn't hold when its site claim is held, before `wc` is looked at;
+    //  - even where it admits one (a channel opened without a site claim), `wc` moves the wallet binding only for
+    //    `siteProven`: the channel's siteBinds AND a site claim the relay ALREADY held, never one pinned by this socket.
+    // So the QR digest can only ever open a channel the relay no longer has. The claim is saved as pending (`sn`) BEFORE
+    // the socket opens (review of #24, finding 1): the relay pins it at the upgrade, and a page that dies before onopen
+    // must still be able to come back with it.
+    const fresh = async () => {
+      const sn = newClaim();
+      this.p = { ...this.p, sn };
+      this.persist();
+      const qr = await claimDigest(await walletClaimFor(this.p.c, key.toPublicKey().toString()));
+      return attempt(sn, qr);
+    };
+
+    if (await attempt(this.p.sc!, wc)) return;
+    const pending = this.p.sn;
+    // A pending claim from a retry whose socket we never saw open: the relay may hold it. Never with `wc`.
+    if (pending && (await attempt(pending))) return;
+    // No pending claim to lose, so a new one can't strand one the relay pinned.
+    if (!v2 && !pending && (await fresh())) return;
+    // Everything was refused, or the relay can't be reached: a browser can't tell which (both are a 1006 close). Only a
+    // relay that answers makes a refusal mean anything; until then the calls wait and the socket is retried as before.
+    if (!(await this.relayAnswers())) throw new Error('Could not reach the bWalletX pairing service');
+    if (await attempt(this.p.sc!, wc)) return; // the first refusal may have been a blip
+    if (this.p.sn && (await attempt(this.p.sn))) return;
+    // The pending claim was refused by a relay that answers, so it holds nothing: a fresh one may replace it.
+    if (!v2 && (await fresh())) return;
+    // The relay answers and refuses every claim we have: the channel is someone else's now. Say so (the same code
+    // bWalletX answers with when a pairing has ended), instead of "Could not reach…" on every retry for ever.
+    const err = Object.assign(new Error('This pairing has ended. Pair with bWalletX again.'), { code: REPAIR_NEEDED });
+    this.failAll(err);
+    throw err;
+  }
+
+  /** The claim a socket just opened with is ours from now on; a pending one is no longer needed. */
+  private useClaim(claim: string) {
+    if (this.p.sc === claim && this.p.sn === undefined) return;
+    const { sn: _sn, ...rest } = this.p;
+    this.p = { ...rest, sc: claim };
+    this.persist();
+  }
+
+  /**
+   * Does the relay answer at all? Opens a site socket on a new, random channel (it is never used, and the relay drops
+   * it within minutes) and closes it. Only asked after every claim was refused.
+   */
+  private async relayAnswers(): Promise<boolean> {
+    const e = Math.floor(Date.now() / 1000) + QR_LIFETIME_S - 10;
+    const url = relaySocketUrl(this.p.r, newChannel(), 'site', e, newClaim(), await claimDigest(newClaim()));
+    return new Promise<boolean>((resolve) => {
+      let ws: SocketLike;
+      const done = (ok: boolean) => {
+        clearTimeout(timer);
+        ws.onopen = ws.onerror = ws.onclose = null;
+        try {
+          ws.close();
+        } catch {
+          /* already closed */
+        }
+        resolve(ok);
+      };
+      try {
+        ws = this.socket(url);
+      } catch {
+        return resolve(false);
+      }
+      const timer = setTimeout(() => done(false), PROBE_MS);
+      ws.onopen = () => done(true);
+      ws.onerror = () => done(false);
+      ws.onclose = () => done(false);
+    });
   }
 
   private openSite(sc: string, wc?: string, onOpen?: () => void) {

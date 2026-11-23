@@ -27,6 +27,23 @@ const mapStorage = (): PairStorage & { m: Map<string, string> } => {
 };
 const stored = (s: { m: Map<string, string> }) => JSON.parse(s.m.get(KEY)!);
 const siteUrls = (relay: FakeRelay) => relay.urls.filter((u) => u.includes('role=site')).map((u) => new URL(u).searchParams);
+/** Site sockets for channel `c` from index `from` of relay.urls (the reachability probe uses another channel). */
+const siteUrlsOn = (relay: FakeRelay, c: string, from = 0) =>
+  relay.urls
+    .slice(from)
+    .filter((u) => u.includes('role=site') && new URL(u).pathname.endsWith(`/${c}`))
+    .map((u) => new URL(u).searchParams);
+/** A relay that refuses the sockets `refuse` picks (refused sockets are still recorded). */
+const refusing =
+  (relay: FakeRelay, refuse: (q: URLSearchParams, url: string) => boolean): SocketFactory =>
+  (url) => {
+    relay.refuse = refuse(new URL(url).searchParams, url);
+    try {
+      return relay.socket(url);
+    } finally {
+      relay.refuse = false;
+    }
+  };
 
 async function pair(relay: FakeRelay, storage = mapStorage(), opts: FakePhoneOptions = {}, socket: SocketFactory = relay.socket) {
   let phone: ReturnType<typeof fakePhone> | null = null;
@@ -97,11 +114,17 @@ describe('wallet claim v2: what the site stores', () => {
     expect(stored(storage).wv).toBeUndefined();
   });
 
-  it('a stored wv other than 2 is not a pairing', async () => {
+  it('an unknown wv is ignored (treated as v1), and the pairing is kept (review of #24, finding 4)', async () => {
     const relay = new FakeRelay(ORIGIN);
-    const { storage } = await pair(relay, undefined, { v2: true });
+    const { wallet, storage } = await pair(relay, undefined, { v2: true });
+    wallet.close();
     storage.m.set(KEY, JSON.stringify({ ...stored(storage), wv: 3 }));
-    expect(await restorePairing({ storage, socket: relay.socket })).toBeNull();
+    const again = await restorePairing({ storage, socket: relay.socket });
+    expect(again).not.toBeNull();
+    await again!.getPublicKey({ identityKey: true });
+    expect(siteUrls(relay).at(-1)!.get('wc')).toBeNull(); // v1: no wc on a live channel
+    expect(storage.m.get(KEY)).toBeTruthy();
+    expect(stored(storage).wv).not.toBe(3);
   });
 
   it('a pairing finished in the return tab stores wv 2 from the sealed ready too', async () => {
@@ -156,15 +179,11 @@ describe('wallet claim v2: v1 pairings reconnect without the QR digest', () => {
     const { sc: oldSc, c, s } = stored(storage);
     wallet.close();
     // After the cutoff the relay re-creates a channel only for a site that names the wallet binding (`wc`).
-    const missing: SocketFactory = (url) => {
-      const q = new URL(url).searchParams;
-      relay.refuse = q.get('role') === 'site' && !q.get('wc');
-      try {
-        return relay.socket(url);
-      } finally {
-        relay.refuse = false;
-      }
-    };
+    let pendingAtOpen: string | undefined;
+    const missing = refusing(relay, (q) => {
+      if (q.get('wc')) pendingAtOpen = stored(storage).sn; // what a page that dies right now would still have
+      return q.get('role') === 'site' && !q.get('wc');
+    });
     const before = siteUrls(relay).length;
     const again = await restorePairing({ storage, socket: missing });
     await again!.getPublicKey({ identityKey: true });
@@ -176,7 +195,72 @@ describe('wallet claim v2: v1 pairings reconnect without the QR digest', () => {
     expect(opened[1].get('wc')).toBe(qr);
     // A fresh site claim: on a channel that still exists the relay refuses it before it reads `wc`.
     expect(opened[1].get('claim')).not.toBe(oldSc);
+    // Saved as pending BEFORE that socket opened (finding 1), and ours once it did.
+    expect(pendingAtOpen).toBe(opened[1].get('claim'));
     expect(stored(storage).sc).toBe(opened[1].get('claim'));
+    expect(stored(storage).sn).toBeUndefined();
+  });
+
+  it('a pending claim the relay pinned before the page saw onopen is tried next, without wc, and kept (finding 1)', async () => {
+    const relay = new FakeRelay(ORIGIN);
+    const { wallet, storage } = await pair(relay);
+    const { sc: oldSc, c } = stored(storage);
+    wallet.close();
+    // The last page saved `sn`, opened with it (the relay pinned it), and died before onopen.
+    const sn = 'pendingPendingPending1';
+    storage.m.set(KEY, JSON.stringify({ ...stored(storage), sn }));
+    const before = relay.urls.length;
+    const again = await restorePairing({ storage, socket: refusing(relay, (q) => q.get('claim') === oldSc) });
+    await again!.getPublicKey({ identityKey: true });
+    const opened = siteUrlsOn(relay, c, before);
+    expect(opened.map((q) => q.get('claim'))).toEqual([oldSc, sn]);
+    expect(opened.map((q) => q.get('wc'))).toEqual([null, null]);
+    expect(stored(storage).sc).toBe(sn);
+    expect(stored(storage).sn).toBeUndefined();
+  });
+
+  it('another tab rotated the site claim: the next reconnect here uses the stored one and writes nothing stale', async () => {
+    const relay = new FakeRelay(ORIGIN);
+    const { wallet, storage } = await pair(relay);
+    const { sc: oldSc, c } = stored(storage);
+    wallet.close();
+    // Tab B is loaded now, with the old claim in memory; it connects only later.
+    let refuseOld = false;
+    const tabB = await restorePairing({ storage, socket: refusing(relay, (q) => refuseOld && q.get('claim') === oldSc), callTimeoutMs: 500 });
+    // Tab A re-creates the lost channel under a fresh claim.
+    const tabA = await restorePairing({ storage, socket: refusing(relay, (q) => q.get('role') === 'site' && !q.get('wc')) });
+    await tabA!.getPublicKey({ identityKey: true });
+    const rotated = stored(storage).sc;
+    expect(rotated).not.toBe(oldSc);
+    tabA!.close();
+    // The relay now refuses the old claim. Tab B reconnects with the rotated one, first time, and writes nothing stale.
+    refuseOld = true;
+    const before = relay.urls.length;
+    // (Unanswered: two live tabs share one pairing's frame counters, so the phone drops tab B's frames as replays. That
+    // is older than 0.9.2 and is why other tabs need a reload; what matters here is the claim it presents and keeps.)
+    await expect(tabB!.getPublicKey({ identityKey: true })).rejects.toMatchObject({ code: 'NO_ANSWER' });
+    expect(siteUrlsOn(relay, c, before).map((q) => q.get('claim'))).toEqual([rotated]);
+    expect(stored(storage).sc).toBe(rotated);
+    expect(stored(storage).sn).toBeUndefined();
+  });
+
+  it('every claim refused by a relay that answers: REPAIR_NEEDED at once, and no retry loop (finding 1)', async () => {
+    const relay = new FakeRelay(ORIGIN);
+    const { wallet, storage } = await pair(relay);
+    const { c } = stored(storage);
+    wallet.close();
+    const before = relay.urls.length;
+    // Our channel refuses everything; a probe on any other channel opens (the relay is reachable).
+    const lockedOut = refusing(relay, (_q, url) => new URL(url).pathname.endsWith(`/${c}`));
+    const again = await restorePairing({ storage, socket: lockedOut, callTimeoutMs: 60_000 });
+    await expect(again!.getPublicKey({ identityKey: true })).rejects.toMatchObject({ code: 'REPAIR_NEEDED' });
+    const tried = siteUrlsOn(relay, c, before);
+    // sc, fresh (QR wc), then once the probe opened: sc, the pending claim (no wc), one more fresh (QR wc).
+    expect(tried.map((q) => !!q.get('wc'))).toEqual([false, true, false, false, true]);
+    expect(relay.urls.slice(before).filter((u) => !u.includes(`/${c}?`))).toHaveLength(1); // the probe
+    await tick(1500);
+    expect(siteUrlsOn(relay, c, before)).toHaveLength(5); // nothing more: no loop
+    expect(await restorePairing({ storage, socket: relay.socket })).not.toBeNull(); // the record is kept
   });
 
   it('refused twice: the site claim is kept, and nothing more is tried for that call', async () => {
@@ -187,13 +271,14 @@ describe('wallet claim v2: v1 pairings reconnect without the QR digest', () => {
     relay.refuse = true;
     const before = relay.urls.length;
     const again = await restorePairing({ storage, socket: relay.socket, callTimeoutMs: 300 });
+    // Unreachable (the probe fails too): not REPAIR_NEEDED, the call just gets no answer.
     await expect(again!.getPublicKey({ identityKey: true })).rejects.toMatchObject({ code: 'NO_ANSWER' });
-    // Refused sockets too: FakeRelay records every URL.
-    const opened = relay.urls.slice(before).filter((u) => u.includes('role=site')).map((u) => new URL(u).searchParams);
+    const opened = siteUrlsOn(relay, stored(storage).c, before); // refused sockets are recorded too
     expect(opened).toHaveLength(2);
     expect(opened[0].get('wc')).toBeNull();
     expect(opened[1].get('wc')).not.toBeNull();
     expect(stored(storage).sc).toBe(sc);
+    expect(stored(storage).sn).toBe(opened[1].get('claim')); // kept as pending: the relay may have pinned it
   });
 
   it('a v2 pairing names only the session claim, never the QR digest, even when refused', async () => {
@@ -206,7 +291,7 @@ describe('wallet claim v2: v1 pairings reconnect without the QR digest', () => {
     const again = await restorePairing({ storage, socket: relay.socket, callTimeoutMs: 300 });
     await expect(again!.getPublicKey({ identityKey: true })).rejects.toBeTruthy();
     const qr = await claimDigest(await walletClaimFor(c, PrivateKey.fromHex(s).toPublicKey().toString()));
-    const tried = relay.urls.slice(before).filter((u) => u.includes('role=site')).map((u) => new URL(u).searchParams.get('wc'));
+    const tried = siteUrlsOn(relay, c, before).map((q) => q.get('wc'));
     expect(tried.length).toBeGreaterThan(0);
     for (const wc of tried) expect(wc).toBe(await claimDigest(phone.sessionClaim));
     expect(tried).not.toContain(qr);

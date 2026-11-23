@@ -9,6 +9,8 @@
  *   C  the downgrade from PR #20 is refused: a v1-stored pairing reconnecting to a LIVE channel never re-binds it to
  *      the QR digest, so whoever saw the QR can't evict the phone;
  *   D  an older phone holding the QR claim (no nc) still works, on a live channel and after a lost one.
+ * Review of #24, finding 1: a fresh claim the relay pinned before the page saw onopen gets back in (it was saved as
+ * pending first), and a channel someone else holds ends in REPAIR_NEEDED instead of a retry loop.
  */
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -98,7 +100,7 @@ const mem = (): PairStorage & { m: Map<string, string> } => {
   const m = new Map<string, string>();
   return { m, getItem: (k) => m.get(k) ?? null, setItem: (k, v) => void m.set(k, v), removeItem: (k) => void m.delete(k) };
 };
-type Stored = { c: string; s: string; k: string; sc: string; wv?: 2 };
+type Stored = { c: string; s: string; k: string; sc: string; wv?: 2; sn?: string };
 const stored = (s: { m: Map<string, string> }) => JSON.parse(s.m.get(KEY)!) as Stored;
 /** What 0.9.1 stored: no wv, whatever the wallet said. */
 const asV091 = (s: { m: Map<string, string> }) => {
@@ -378,12 +380,15 @@ describe('real relay after the legacy cutoff (legacyUntil: 0)', () => {
     siteUrls.length = 0;
     const w2 = await restore(storage, flaky);
     expect(await call(w2)).toBe('answered');
-    // 1: the blip; 2: the QR digest under a fresh claim, refused ('role claimed'); 3: the retry a second later.
-    expect(siteUrls.length).toBeGreaterThanOrEqual(3);
-    expect(siteUrls[1].get('wc')).toBe(await qrDigest(p));
-    expect(siteUrls[1].get('claim')).not.toBe(p.sc);
-    expect(siteUrls.at(-1)!.get('claim')).toBe(p.sc);
+    // 1: the blip; 2: the QR digest under a fresh claim, refused ('role claimed'); 3: the reachability probe (another
+    // channel); 4: our claim again, now that the relay is known to answer.
+    const ours = siteUrls.filter((_q, i) => i !== 2);
+    expect(siteUrls).toHaveLength(4);
+    expect(ours.map((q) => q.get('wc'))).toEqual([null, await qrDigest(p), null]);
+    expect(ours[1].get('claim')).not.toBe(p.sc);
+    expect(ours[2].get('claim')).toBe(p.sc);
     expect(stored(storage).sc).toBe(p.sc); // the refused claim never replaced ours
+    expect(stored(storage).sn).toBeUndefined(); // and the pending one went once ours opened
     offset = 10 * 60_000;
     expect(await qrHolderJoins(p)).toBe(403);
     expect(phone.closedWith).toBeUndefined();
@@ -402,6 +407,65 @@ describe('real relay after the legacy cutoff (legacyUntil: 0)', () => {
     expect(await qrHolderJoins(p)).toBe('open');
     await until(() => !!phone.closedWith);
     expect(phone.closedWith).toBe('4001 replaced');
+  });
+
+  it('finding 1: the relay pinned the fresh claim but the page never saw onopen; the pending claim gets back in', async () => {
+    await boot();
+    const { wallet, phone, storage } = await pairOnce(true);
+    asV091(storage);
+    const p = stored(storage);
+    wallet.close();
+    phone.close();
+    await boot(); // the channel is lost
+    // The socket that re-creates the channel (it carries wc) is accepted by the relay, which pins its site claim, but
+    // the page dies before onopen: here, the socket is cut the moment it opens and the page only hears a close.
+    let pendingAtOpen: string | undefined;
+    const dies = (url: string): SocketLike => {
+      if (!new URL(url).searchParams.get('wc')) return siteSocket(url);
+      siteUrls.push(new URL(url).searchParams);
+      pendingAtOpen = stored(storage).sn;
+      const inner = new WebSocket(routed(url), { origin: ORIGIN });
+      cleanups.push(() => inner.terminate());
+      const s: SocketLike = { readyState: 0, onopen: null, onmessage: null, onerror: null, onclose: null, send: () => {}, close: () => inner.terminate() };
+      inner.on('error', () => {});
+      inner.on('open', () => inner.terminate());
+      inner.on('close', () => s.onclose?.({}));
+      return s;
+    };
+    siteUrls.length = 0;
+    const w2 = await restore(storage, dies);
+    const answered = call(w2);
+    await until(() => stored(storage).sc !== p.sc);
+    const sn = siteUrls[1].get('claim')!;
+    expect(pendingAtOpen).toBe(sn); // saved before the socket opened
+    // sc (no such channel) → fresh + QR digest (pinned, never seen open) → probe → sc (role claimed) → the pending
+    // claim, WITHOUT wc → open.
+    const ours = siteUrls.filter((_q, i) => i !== 2);
+    expect(ours.map((q) => q.get('claim'))).toEqual([p.sc, sn, p.sc, sn]);
+    expect(ours.map((q) => q.get('wc'))).toEqual([null, await qrDigest(p), null, null]);
+    expect(stored(storage).sc).toBe(sn);
+    expect(stored(storage).sn).toBeUndefined();
+    expect(await phone.rejoin()).toBe('qr');
+    expect(await answered).toBe('answered');
+    expect(await qrHolderJoins(p)).toBe(403);
+  });
+
+  it('finding 1: a channel someone else holds: REPAIR_NEEDED, not "Could not reach…" for ever', async () => {
+    await boot();
+    const { wallet, phone, storage } = await pairOnce(false);
+    const p = stored(storage);
+    wallet.close();
+    phone.close();
+    await boot(); // the channel is lost, and a stranger (any client can send an Origin) re-creates it first
+    const e = Math.floor(Date.now() / 1000) + 100;
+    expect(await tryOpen(relaySocketUrl(RELAY, p.c, 'site', e, 'strangerStrangerStrang', 'd'.repeat(64)), ORIGIN)).toBe('open');
+    siteUrls.length = 0;
+    const w2 = await restore(storage);
+    await expect(w2.getVersion({})).rejects.toMatchObject({ code: 'REPAIR_NEEDED' });
+    const n = siteUrls.length;
+    await tick(1500);
+    expect(siteUrls).toHaveLength(n); // no retry loop
+    expect(stored(storage).sc).toBe(p.sc);
   });
 
   it('D: an older phone holding the QR claim (no nc) still works, on a live channel and after a lost one', async () => {

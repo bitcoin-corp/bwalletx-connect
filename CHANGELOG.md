@@ -15,15 +15,38 @@
   - **v1 pairings never send the QR digest to a live channel.** PR #20's design sent it on every reopen, which made the
     relay re-bind a live, session-bound wallet role back to the QR claim, so anyone who saw the QR could evict the
     phone. A v1 pairing now opens without `wc`; only if that is refused does it retry once with the QR-bound claim's
-    digest, under a fresh site claim (kept only once that socket opens). A browser can't see why a socket was refused,
-    so the fresh claim is what makes this safe: on a channel that still exists the relay refuses it ("role claimed")
-    before it reads `wc`.
+    digest, under a fresh site claim. A browser can't see why a socket was refused, so the fresh claim is what makes
+    this safe, through two relay checks: `claimOk` refuses a claim the channel doesn't hold when its site claim is held
+    (before `wc` is read), and `wc` moves the wallet binding only for `siteProven` (the channel's `siteBinds` plus a
+    site claim the relay already held), so even a channel opened without a site claim can't be re-bound.
+  - **Claim rotation survives a page that dies mid-open.** The fresh claim is saved as pending (`sn`) BEFORE its socket
+    opens, since the relay pins it at the upgrade. A reconnect tries `sc`, then the pending claim (never with `wc`),
+    and only then a new fresh claim; whichever opens becomes `sc`.
+  - **Locked out: `REPAIR_NEEDED`, not a retry loop.** When every claim is refused, a throwaway socket on a new random
+    channel checks that the relay answers at all (a refused socket and an unreachable relay look the same to a page).
+    If it does, our claims are tried once more and, if still refused, waiting calls reject with
+    `{ code: 'REPAIR_NEEDED' }` (the code bWalletX already answers with when a pairing has ended), so the site can ask
+    the user to pair again. An unreachable relay keeps the old behaviour: calls wait and the socket is retried.
+  - A stored `wv` other than 2 is ignored (treated as v1) rather than discarding the pairing; so is a malformed `sn`.
+  - Each reconnect starts from the claims in storage (same pairing only), so a tab that loaded before another tab
+    rotated the claim neither presents nor writes back the stale one.
   - Pairing revives (`pairBwalletX` rejoining its own channel) still send no `wc`.
   - Tests: `test/relay-interop.test.ts` runs pairing against a copy of the real relay (`test/fixtures/relay.mjs`, from
     bWalletX 5.2.61) after the cutoff, with a 5.2.61-style phone and an older one: v2 re-creation after the 31-day drop,
     a 0.9.1-stored pairing upgrading after a lost state file, the PR #20 downgrade refused (with a control showing the
     eviction it allowed), and an older QR-claim phone. `relaySocketUrl` sends the digest as `nc` on a wallet socket,
     as bWalletX's copy does (internal; used by the tests' phones).
+
+Known gaps (relay behaviour, unchanged here):
+- **The 110 s re-create window.** A re-created channel is unpaired until the phone rejoins, with the expiry the site
+  sent (about 110 s). A phone that misses the window gets 410 ("qr expired") while that site socket stays open, until
+  the tab reloads (or the socket otherwise closes and a call reopens it). For a v1 pairing re-created with the QR
+  digest, someone who saw the QR could also join in that window and bind their own session claim, locking the phone
+  out (the site would then see `REPAIR_NEEDED` only if it loses the site role too; otherwise its calls go unanswered).
+- **Other tabs after a claim rotation.** Each reconnect now starts from the claims in storage, so a tab that loaded
+  before another tab rotated the site claim (the v1 re-create) presents the new claim and never writes the old one
+  back. It still needs a reload to talk to the wallet: open tabs share one pairing's frame counters, so the phone drops
+  the second tab's frames as replays (older than 0.9.2).
 
 ## 0.9.1 (22 Nov 2026)
 
