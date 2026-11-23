@@ -58,20 +58,22 @@ async function pair(relay: FakeRelay, storage = mapStorage(), opts: FakePhoneOpt
 }
 
 /**
- * The reachability check (pair.ts relayAnswers) fetches https://<relay>/health. Never the network here: by default the
- * relay doesn't answer; a test sets `answers` to make it.
+ * The reachability check (pair.ts relayAnswers) is a site socket on a random channel, never an HTTPS request: a
+ * network that blocks WebSocket upgrades but lets HTTPS through must not look like a relay that refuses us. So HTTPS
+ * "works" in every test here, and connect must never use it.
  */
-const health = { answers: false, calls: [] as { url: string; init?: RequestInit }[] };
+const https = { calls: 0 };
 beforeEach(() => {
-  health.answers = false;
-  health.calls = [];
-  vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
-    health.calls.push({ url, init });
-    if (!health.answers) throw new TypeError('Failed to fetch');
+  https.calls = 0;
+  vi.stubGlobal('fetch', async () => {
+    https.calls++;
     return new Response(null, { status: 200 });
   });
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  expect(https.calls).toBe(0);
+  vi.unstubAllGlobals();
+});
 
 /**
  * The relay's site-role rules for one channel, after the cutoff (relay.mjs admit/attach): a missing channel is created
@@ -285,24 +287,21 @@ describe('wallet claim v2: v1 pairings reconnect without the QR digest', () => {
     const { c } = stored(storage);
     wallet.close();
     const before = relay.urls.length;
-    // Our channel refuses everything, and the relay answers /health.
-    health.answers = true;
+    // Our channel refuses everything; a probe on any other channel opens (the relay answers).
     const lockedOut = refusing(relay, (_q, url) => new URL(url).pathname.endsWith(`/${c}`));
     const again = await restorePairing({ storage, socket: lockedOut, callTimeoutMs: 60_000 });
     await expect(again!.getPublicKey({ identityKey: true })).rejects.toMatchObject({ code: 'REPAIR_NEEDED' });
     const tried = siteUrlsOn(relay, c, before);
-    // sc, fresh (QR wc), then once /health answered: sc, the pending claim (no wc), one more fresh (QR wc).
+    // sc, fresh (QR wc), then once the probe opened: sc, the pending claim (no wc), one more fresh (QR wc).
     expect(tried.map((q) => !!q.get('wc'))).toEqual([false, true, false, false, true]);
-    expect(relay.urls.slice(before).filter((u) => !u.includes(`/${c}?`))).toEqual([]); // no probe channel
-    expect(health.calls).toHaveLength(1);
-    expect(health.calls[0].url).toBe('https://relay.bwallet.space/health');
-    expect(health.calls[0].init).toMatchObject({ mode: 'no-cors', credentials: 'omit' });
+    const probes = () => relay.urls.slice(before).filter((u) => !u.includes(`/${c}?`));
+    expect(probes()).toHaveLength(1);
     await tick(1500);
     expect(siteUrlsOn(relay, c, before)).toHaveLength(5); // nothing more: no loop
-    // Later calls fail at once (re-check of #24): no sockets, no /health.
+    // Later calls fail at once (re-check of #24): no sockets, no probe.
     await expect(again!.getPublicKey({ identityKey: true })).rejects.toMatchObject({ code: 'REPAIR_NEEDED' });
     expect(siteUrlsOn(relay, c, before)).toHaveLength(5);
-    expect(health.calls).toHaveLength(1);
+    expect(probes()).toHaveLength(1);
     expect(await restorePairing({ storage, socket: relay.socket })).not.toBeNull(); // the record is kept
   });
 
@@ -311,7 +310,6 @@ describe('wallet claim v2: v1 pairings reconnect without the QR digest', () => {
     const { wallet, storage } = await pair(relay);
     const { c } = stored(storage);
     wallet.close();
-    health.answers = true;
     let lockedOut = true;
     const again = await restorePairing({ storage, socket: refusing(relay, (_q, url) => lockedOut && new URL(url).pathname.endsWith(`/${c}`)), callTimeoutMs: 2000 });
     await expect(again!.getPublicKey({ identityKey: true })).rejects.toMatchObject({ code: 'REPAIR_NEEDED' });
@@ -328,7 +326,6 @@ describe('wallet claim v2: v1 pairings reconnect without the QR digest', () => {
     const { wallet, storage } = await pair(relay);
     const { c, sc: oldSc } = stored(storage);
     wallet.close();
-    health.answers = true;
     const model = channelModel(relay, c);
     const before = relay.urls.length;
     // Both tabs loaded the same record; the relay has lost the channel.
@@ -363,7 +360,6 @@ describe('wallet claim v2: v1 pairings reconnect without the QR digest', () => {
     const { wallet, storage } = await pair(relay);
     const { c } = stored(storage);
     wallet.close();
-    health.answers = true;
     // Young (another tab may still be opening with it): not raced, and not a REPAIR_NEEDED verdict either.
     storage.m.set(KEY, JSON.stringify({ ...stored(storage), sn: 'deadPageDeadPageDeadPa', sa: Date.now() }));
     const young = channelModel(relay, c);
@@ -384,18 +380,46 @@ describe('wallet claim v2: v1 pairings reconnect without the QR digest', () => {
     expect(stored(storage).sn).toBeUndefined();
   });
 
+  it('a pending claim stamped in the future is not in flight: replaced, and the channel re-created', async () => {
+    const relay = new FakeRelay(ORIGIN);
+    const { wallet, storage } = await pair(relay);
+    const { c } = stored(storage);
+    wallet.close();
+    storage.m.set(KEY, JSON.stringify({ ...stored(storage), sn: 'futureFutureFutureFutu', sa: Date.now() + 3_600_000 }));
+    const model = channelModel(relay, c);
+    const before = relay.urls.length;
+    const tab = await restorePairing({ storage, socket: model.socket, callTimeoutMs: 2000 });
+    await tab!.getPublicKey({ identityKey: true });
+    expect(siteUrlsOn(relay, c, before).filter((q) => q.get('wc'))).toHaveLength(1);
+    expect(stored(storage).sc).toBe(model.m.owner);
+    expect(stored(storage).sn).toBeUndefined();
+  });
+
+  it('WebSocket upgrades blocked but HTTPS reachable (a proxy, antivirus): not REPAIR_NEEDED', async () => {
+    const relay = new FakeRelay(ORIGIN);
+    const { wallet, storage } = await pair(relay);
+    wallet.close();
+    relay.refuse = true; // every socket fails, the probe's too; fetch would succeed (see beforeEach) but isn't used
+    const again = await restorePairing({ storage, socket: relay.socket, callTimeoutMs: 400 });
+    await expect(again!.getPublicKey({ identityKey: true })).rejects.toMatchObject({ code: 'NO_ANSWER' });
+    relay.refuse = false;
+    expect(storage.m.get(KEY)).toBeTruthy();
+  });
+
   it('a claim another tab stores while we try is used before the REPAIR_NEEDED verdict', async () => {
     const relay = new FakeRelay(ORIGIN);
     const { wallet, storage } = await pair(relay, undefined, { v2: true }); // v2: no fresh claim of our own to try
     const { c, sc } = stored(storage);
     wallet.close();
-    const tab = await restorePairing({ storage, socket: refusing(relay, (q, url) => new URL(url).pathname.endsWith(`/${c}`) && q.get('claim') !== 'otherTabOtherTabOtherT'), callTimeoutMs: 2000 });
-    // Our claim is refused; while we check /health, another tab gets in under its own claim and stores it.
-    health.answers = true;
-    vi.stubGlobal('fetch', async () => {
-      storage.m.set(KEY, JSON.stringify({ ...stored(storage), sc: 'otherTabOtherTabOtherT' }));
-      return new Response(null, { status: 200 });
+    // Our claim is refused; while we probe the relay, another tab gets in under its own claim and stores it.
+    const socket = refusing(relay, (q, url) => {
+      if (!new URL(url).pathname.endsWith(`/${c}`)) {
+        storage.m.set(KEY, JSON.stringify({ ...stored(storage), sc: 'otherTabOtherTabOtherT' })); // the probe
+        return false;
+      }
+      return q.get('claim') !== 'otherTabOtherTabOtherT';
     });
+    const tab = await restorePairing({ storage, socket, callTimeoutMs: 2000 });
     const before = relay.urls.length;
     await tab!.getPublicKey({ identityKey: true });
     expect(siteUrlsOn(relay, c, before).map((q) => q.get('claim'))).toEqual([sc, sc, 'otherTabOtherTabOtherT']);
@@ -409,7 +433,7 @@ describe('wallet claim v2: v1 pairings reconnect without the QR digest', () => {
     relay.refuse = true;
     const before = relay.urls.length;
     const again = await restorePairing({ storage, socket: relay.socket, callTimeoutMs: 300 });
-    // Unreachable (/health fails too): not REPAIR_NEEDED, the call just gets no answer.
+    // Unreachable (the probe fails too): not REPAIR_NEEDED, the call just gets no answer.
     await expect(again!.getPublicKey({ identityKey: true })).rejects.toMatchObject({ code: 'NO_ANSWER' });
     const opened = siteUrlsOn(relay, stored(storage).c, before); // refused sockets are recorded too
     expect(opened).toHaveLength(2);

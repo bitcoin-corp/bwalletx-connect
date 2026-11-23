@@ -16,7 +16,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { PrivateKey } from '@bsv/sdk';
 import { WebSocket } from 'ws';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { restorePairing, pairBwalletX, type PairStorage, type PairedWallet, type SocketLike } from '../src/pair';
 import {
   Sealer,
@@ -48,31 +48,13 @@ const until = async (ok: () => boolean | Promise<boolean>, ms = 5000) => {
 let offset = 0; // the relay's clock runs `offset` ms ahead of ours
 let target = ''; // where relay.test routes: a fresh relay instance = a lost state file
 const cleanups: (() => unknown)[] = [];
-const realFetch = globalThis.fetch;
-const healthChecks: string[] = [];
-beforeEach(() => {
-  // connect asks https://<relay>/health whether the relay answers (pair.ts relayAnswers): route it like the sockets.
-  vi.stubGlobal('fetch', (url: string, init?: RequestInit) => {
-    healthChecks.push(url);
-    const u = new URL(url);
-    u.protocol = 'http:';
-    u.host = target;
-    return realFetch(u.toString(), init);
-  });
-});
 afterEach(async () => {
-  vi.unstubAllGlobals();
-  healthChecks.length = 0;
   for (const f of cleanups.splice(0).reverse()) await f();
   offset = 0;
 });
 
 async function boot() {
-  // /health as relay/server.mjs serves it, on the same host as the sockets.
-  const server = createServer((req, res) => {
-    if (req.url === '/health') return void res.writeHead(200, { 'content-type': 'application/json' }).end('{"ok":true}');
-    res.writeHead(404).end();
-  });
+  const server = createServer();
   const relay = createRelay({ server, legacyUntil: 0, now: () => Date.now() + offset }); // after the 30 Nov cutoff
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   const host = `127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -398,11 +380,11 @@ describe('real relay after the legacy cutoff (legacyUntil: 0)', () => {
     siteUrls.length = 0;
     const w2 = await restore(storage, flaky);
     expect(await call(w2)).toBe('answered');
-    // 1: the blip; 2: the QR digest under a fresh claim, refused ('role claimed'); then /health answers, and 3: our claim
-    // again, now that the relay is known to answer.
-    const ours = siteUrls;
-    expect(siteUrls).toHaveLength(3);
-    expect(healthChecks).toEqual(['https://relay.test/health']);
+    // 1: the blip; 2: the QR digest under a fresh claim, refused ('role claimed'); 3: the reachability probe (another
+    // channel); 4: our claim again, now that the relay is known to answer.
+    const ours = siteUrls.filter((_q, i) => i !== 2);
+    expect(siteUrls).toHaveLength(4);
+    expect(siteUrls[2].get('wc')).not.toBeNull(); // the probe opens a new channel, so it carries a (random) wc
     expect(ours.map((q) => q.get('wc'))).toEqual([null, await qrDigest(p), null]);
     expect(ours[1].get('claim')).not.toBe(p.sc);
     expect(ours[2].get('claim')).toBe(p.sc);
@@ -457,10 +439,9 @@ describe('real relay after the legacy cutoff (legacyUntil: 0)', () => {
     await until(() => stored(storage).sc !== p.sc);
     const sn = siteUrls[1].get('claim')!;
     expect(pendingAtOpen).toBe(sn); // saved before the socket opened
-    // sc (no such channel) → fresh + QR digest (pinned, never seen open) → /health → sc (role claimed) → the pending
+    // sc (no such channel) → fresh + QR digest (pinned, never seen open) → probe → sc (role claimed) → the pending
     // claim, WITHOUT wc → open.
-    const ours = siteUrls;
-    expect(healthChecks).toHaveLength(1);
+    const ours = siteUrls.filter((_q, i) => i !== 2);
     expect(ours.map((q) => q.get('claim'))).toEqual([p.sc, sn, p.sc, sn]);
     expect(ours.map((q) => q.get('wc'))).toEqual([null, await qrDigest(p), null, null]);
     expect(stored(storage).sc).toBe(sn);
@@ -485,11 +466,9 @@ describe('real relay after the legacy cutoff (legacyUntil: 0)', () => {
     const n = siteUrls.length;
     await tick(1500);
     expect(siteUrls).toHaveLength(n); // no retry loop
-    // Later calls fail at once: no sockets, no /health.
-    const checks = healthChecks.length;
+    // Later calls fail at once: no sockets, no probe.
     await expect(w2.getVersion({})).rejects.toMatchObject({ code: 'REPAIR_NEEDED' });
     expect(siteUrls).toHaveLength(n);
-    expect(healthChecks).toHaveLength(checks);
     expect(stored(storage).sc).toBe(p.sc);
   });
 

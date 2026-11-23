@@ -6,7 +6,7 @@
  * These tests play that out against the fake relay (which queues like the real one) and a fake phone.
  */
 import { PrivateKey, ProtoWallet, PublicKey, Signature, Utils } from '@bsv/sdk';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { pairBwalletX, resumeReturnedPairing, type PairStorage, type PairedWallet } from '../src/pair';
 import { Sealer, deriveSession, loginMessageFor, parsePairUrl, parseReturnFragment, returnFragment } from '../src/protocol';
 import { FakeRelay, FakeSocket } from './fake-relay';
@@ -442,12 +442,9 @@ describe('review 2 (22 Nov)', () => {
     s.drop();
     s.wakeClosed();
     relay.refuse = true;
-    // While refused, the reachability probe (a fetch of the relay's /health) fails too: unreachable, not REPAIR_NEEDED.
-    vi.stubGlobal('fetch', () => Promise.reject(new TypeError('offline')));
     const spend = w.createAction({ description: 'x', outputs: [] } as never);
     await tick(30);
     relay.refuse = false;
-    vi.unstubAllGlobals();
     wake.fire();
     await spend;
     expect(phone!.requests.filter((a) => a === 'createAction').length).toBe(1);

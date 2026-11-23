@@ -581,7 +581,8 @@ class Link {
       const saved = peek instanceof Promise ? await peek : peek;
       if (this.adoptClaims(saved)) return tryAdopted();
       // A pending claim we didn't write is another tab's rotation: while it may still be in flight, don't race it.
-      if (this.p.sn && this.p.sn !== this.mine && Date.now() - (this.p.sa ?? 0) < PENDING_MS) {
+      const age = Date.now() - (this.p.sa ?? 0); // a time in the future (clock change, bad data) is not in flight
+      if (this.p.sn && this.p.sn !== this.mine && age >= 0 && age < PENDING_MS) {
         othersInFlight = true;
         return false;
       }
@@ -633,23 +634,35 @@ class Link {
   }
 
   /**
-   * Does the relay answer at all? A no-cors GET of its /health (relay server.mjs, same host): any response means it
-   * answers, a network error (or no answer in 10 s) means it doesn't. No channel is opened. Where fetch is missing or
-   * blocked (a page CSP that allows only the wss: relay), it counts as not answering: the old wait-and-retry.
+   * Does the relay answer at all? Opens a site socket on a new, random channel (it is never used, and the relay drops
+   * it within minutes) and closes it. Only asked after every claim was refused. A socket, not an HTTPS request: a network that blocks WebSocket
+   * upgrades (some proxies, antivirus) but lets HTTPS through must not look like a relay that refuses us.
    */
   private async relayAnswers(): Promise<boolean> {
-    if (typeof fetch !== 'function') return false;
-    const local = /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(this.p.r);
-    const ctl = typeof AbortController === 'function' ? new AbortController() : undefined;
-    const timer = setTimeout(() => ctl?.abort(), PROBE_MS);
-    try {
-      await fetch(`${local ? 'http' : 'https'}://${this.p.r}/health`, { mode: 'no-cors', cache: 'no-store', credentials: 'omit', signal: ctl?.signal });
-      return true;
-    } catch {
-      return false;
-    } finally {
-      clearTimeout(timer);
-    }
+    const e = Math.floor(Date.now() / 1000) + QR_LIFETIME_S - 10;
+    const url = relaySocketUrl(this.p.r, newChannel(), 'site', e, newClaim(), await claimDigest(newClaim()));
+    return new Promise<boolean>((resolve) => {
+      let ws: SocketLike;
+      const done = (ok: boolean) => {
+        clearTimeout(timer);
+        ws.onopen = ws.onerror = ws.onclose = null;
+        try {
+          ws.close();
+        } catch {
+          /* already closed */
+        }
+        resolve(ok);
+      };
+      try {
+        ws = this.socket(url);
+      } catch {
+        return resolve(false);
+      }
+      const timer = setTimeout(() => done(false), PROBE_MS);
+      ws.onopen = () => done(true);
+      ws.onerror = () => done(false);
+      ws.onclose = () => done(false);
+    });
   }
 
   private openSite(sc: string, wc?: string, onOpen?: () => void) {

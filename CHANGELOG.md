@@ -25,14 +25,18 @@
   - **Tabs don't overwrite each other's rotation.** Storage is re-read when a reconnect starts, right before a fresh
     claim is written (compare-and-set: with localStorage nothing runs between the read and the write), and before any
     verdict; claims another tab stored are tried first. Another tab's pending claim younger than 30 s is never replaced
-    (its socket is still opening); an older one (that page is gone) may be, so a missing channel is still re-created.
+    (its socket is still opening); an older one (that page is gone), or one stamped in the future, may be, so a missing
+    channel is still re-created.
   - **Locked out: `REPAIR_NEEDED`, not a retry loop.** When every claim is refused, connect asks whether the relay
-    answers at all, with a `no-cors` GET of `https://<relay>/health` (a refused socket and an unreachable relay look the
-    same to a page; any response counts, a network error doesn't). If it answers, our claims are tried once more (and,
+    answers at all by opening a site socket on a new, random channel and closing it (a refused socket and an unreachable
+    relay look the same to a page). It is a socket, not an HTTPS request, so a network that blocks WebSocket upgrades
+    but lets HTTPS through (some proxies, antivirus) never looks like a relay that refuses us; the unused channel is
+    dropped by the relay within minutes, and with fail-fast (below) the probe runs at most once per page per change of
+    the stored claims. If it answers, our claims are tried once more (and,
     for v1, one more fresh claim, needed when a dead page's pending claim never reached the relay); if all are still
     refused, waiting calls reject with `{ code: 'REPAIR_NEEDED' }` and later calls fail at once, with no sockets, until
-    the stored claims change or a socket opens. An unreachable relay (or a page CSP that blocks the fetch) keeps the old
-    behaviour: calls wait and the socket is retried.
+    the stored claims change or a socket opens. An unreachable relay keeps the old behaviour: calls wait and the socket
+    is retried.
   - **`REPAIR_NEEDED` can now come from connect itself** (the relay refused every claim this pairing holds), not only
     from the phone (bWalletX answering a call on a pairing it has ended). A site that maps `REPAIR_NEEDED` to "forget
     the pairing and show the QR" (as tokenblaster does) gets that here too; the stored pairing is not deleted by
