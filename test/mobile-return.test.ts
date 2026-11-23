@@ -239,7 +239,7 @@ describe('same phone: return to the site, sign-in folded into Connect', () => {
     const returns = mapStorage();
     let link = '';
     void pairBwalletX({ origin: ORIGIN, storage: null, returnStorage: returns, socket: relay.socket, returnTo: PAGE, login: challenge(), onCode: () => {}, onLink: (l) => (link = l) }).catch(() => {});
-    await tick(5);
+    await until(() => !!link); // not a fixed tick: the link comes after two digests (flaked under load)
     // The old tab sleeps (hidden: it doesn't rejoin on its own while the new tab runs).
     siteSocket(relay, parsePairUrl(link).c)!.drop();
     const phone = fakePhone(link, relay.socket, PrivateKey.fromRandom(), { fold: true });
@@ -479,7 +479,7 @@ describe('review 2 (22 Nov)', () => {
     returns.setItem('bwalletx.connect.return.staleStaleStaleStale1', JSON.stringify({ v: 1, rid: 'staleStaleStaleStale1', at: Date.now() - 11 * 60_000, s: 'ab'.repeat(32) }));
     let link = '';
     void pairBwalletX({ origin: ORIGIN, storage: null, returnStorage: returns, socket: relay.socket, returnTo: PAGE, login: ch(), onCode: () => {}, onLink: (l) => (link = l) }).catch(() => {});
-    await tick(5);
+    await until(() => !!link); // not a fixed tick: the link comes after two digests (flaked under load)
     expect(returns.m.has('bwalletx.connect.return.staleStaleStaleStale1')).toBe(false);
     siteSocket(relay, parsePairUrl(link).c)!.drop();
     const phone = fakePhone(link, relay.socket, PrivateKey.fromRandom(), { fold: true });

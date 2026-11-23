@@ -1,12 +1,14 @@
 import { PrivateKey, ProtoWallet, Utils } from '@bsv/sdk';
 import {
   Sealer,
+  claimDigest,
   deriveSession,
   isSealed,
   loginMessageFor,
   parsePairUrl,
   relaySocketUrl,
   returnFragment,
+  sessionWalletClaim,
   type PairMessage,
   type SealedFrame,
 } from '../src/protocol';
@@ -28,6 +30,12 @@ export interface FakePhoneOptions {
   slowActions?: boolean;
   /** These actions are recorded but never answered (their sheet is still up). */
   slow?: string[];
+  /** bWalletX 5.2.61+ (wallet claim v2): every ready names the session claim's digest (`wcv: 2, nc`). */
+  v2?: boolean;
+  /** A plaintext hello that says `wcv: 2` (a site must not trust it: only the sealed ready's `nc` counts). */
+  helloWcv?: boolean;
+  /** The `nc` the readies name, instead of the real session claim's digest (a wallet the site must not believe). */
+  wrongNc?: string;
 }
 
 /**
@@ -49,16 +57,26 @@ export function fakePhone(link: string, socket: SocketFactory, root: PrivateKey,
     returnTo?: string;
     connect: () => Promise<void>;
     hello: string;
-  } = { requests: [], hello: '', connect: async () => {} };
-  state.hello = JSON.stringify({ t: 'hello', k: P.toPublicKey().toString(), info: { name: 'test', rdns: 'space.bwallet.mobile' } });
+    /** This pairing's session claim (wallet claim v2), as the phone computes it from its key and the QR's. */
+    sessionClaim: string;
+  } = { requests: [], hello: '', connect: async () => {}, sessionClaim: sessionWalletClaim(P, l.k, l.c) };
+  state.hello = JSON.stringify({
+    t: 'hello',
+    k: P.toPublicKey().toString(),
+    info: { name: 'test', rdns: 'space.bwallet.mobile' },
+    ...(opts.helloWcv && { wcv: 2 }),
+  });
+  /** What bWalletX 5.2.61+ adds to every ready (readyFor in sessions.ts). */
+  const v2Fields = async () =>
+    opts.v2 ? { wcv: 2 as const, nc: opts.wrongNc ?? (await claimDigest(state.sessionClaim)) } : {};
 
   const folded = () => !!((opts.fold || opts.loginOverRelay) && l.ln && l.lx);
   /** The relay's ready. */
   const relayReady = async (): Promise<PairMessage> =>
-    opts.loginOverRelay ? loginReady() : folded() ? ({ t: 'ready', ls: 1 } as PairMessage) : { t: 'ready' };
+    opts.loginOverRelay ? loginReady() : folded() ? ({ t: 'ready', ls: 1, ...(await v2Fields()) } as PairMessage) : { t: 'ready', ...(await v2Fields()) };
   /** The ready with the signature, for the return fragment only. */
   const loginReady = async (): Promise<PairMessage> => {
-    if (!folded()) return { t: 'ready' };
+    if (!folded()) return { t: 'ready', ...(await v2Fields()) };
     const message = loginMessageFor(l.o, l.ln!, l.lx!);
     const { signature } = (await pw.createSignature({
       protocolID: [2, 'bwallet sign in'],
@@ -66,7 +84,7 @@ export function fakePhone(link: string, socket: SocketFactory, root: PrivateKey,
       counterparty: 'anyone',
       data: Array.from(new TextEncoder().encode(message)),
     })) as { signature: number[] };
-    return { t: 'ready', login: { k: root.toPublicKey().toString(), sig: Utils.toHex(signature) } };
+    return { t: 'ready', ...(await v2Fields()), login: { k: root.toPublicKey().toString(), sig: Utils.toHex(signature) } };
   };
   /** Seal the relay ready, then (folded) the fragment's ready with the signature, which gets the HIGHER seq. */
   const readyFrames = async () => {
