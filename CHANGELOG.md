@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.9.2 (unreleased)
+
+- **Fix: a paired site could not get a lost relay channel back after the relay's legacy-claims cutoff (30 Nov 2026).**
+  After the cutoff the relay re-creates a channel only for a site that names the wallet binding (`wc`), and 0.9.1's
+  reconnect never sent one, so a channel the relay dropped (31 days idle, or a lost state file) meant pairing again.
+  Drop-in for `^0.9.0`: no public signature changes, `confirmCode` stays optional.
+  - **Wallet claim v2.** A pairing stores `wv: 2` when the wallet's SEALED `ready` names its session claim (`nc`) and that
+    matches the claim the site derives itself (`sessionWalletClaim`: HMAC-SHA256 keyed by the ECDH point of the two
+    pairing keys, the same bytes as bWalletX and the CLI; shared test vector). Never from the plaintext hello's `wcv`.
+    Learned in `pairBwalletX`, in `resumeReturnedPairing`, and on any later `ready` (that is how a pairing stored by
+    0.9.1 upgrades: bWalletX 5.2.61+ names the claim on every rejoin). A v2 pairing sends the session claim's digest as
+    `wc` on every reconnect: a no-op on a live channel already bound to it, and a re-created channel admits only the phone.
+  - **v1 pairings never send the QR digest to a live channel.** PR #20's design sent it on every reopen, which made the
+    relay re-bind a live, session-bound wallet role back to the QR claim, so anyone who saw the QR could evict the
+    phone. A v1 pairing now opens without `wc`; only if that is refused does it retry once with the QR-bound claim's
+    digest, under a fresh site claim (kept only once that socket opens). A browser can't see why a socket was refused,
+    so the fresh claim is what makes this safe: on a channel that still exists the relay refuses it ("role claimed")
+    before it reads `wc`.
+  - Pairing revives (`pairBwalletX` rejoining its own channel) still send no `wc`.
+  - Tests: `test/relay-interop.test.ts` runs pairing against a copy of the real relay (`test/fixtures/relay.mjs`, from
+    bWalletX 5.2.61) after the cutoff, with a 5.2.61-style phone and an older one: v2 re-creation after the 31-day drop,
+    a 0.9.1-stored pairing upgrading after a lost state file, the PR #20 downgrade refused (with a control showing the
+    eviction it allowed), and an older QR-claim phone. `relaySocketUrl` sends the digest as `nc` on a wallet socket,
+    as bWalletX's copy does (internal; used by the tests' phones).
+
 ## 0.9.1 (22 Nov 2026)
 
 - **Fix: sign-in crashed React 19 sites on phones.** React 19 sets known custom-element props as properties, and `<bwalletx-signin>` only had a `state` getter, so a driven `<BwalletxSignin>` threw "Cannot set property state … which has only a getter" when the chooser or pending state rendered. The element now has a `state` setter that mirrors the attribute.
