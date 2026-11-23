@@ -19,17 +19,25 @@
     this safe, through two relay checks: `claimOk` refuses a claim the channel doesn't hold when its site claim is held
     (before `wc` is read), and `wc` moves the wallet binding only for `siteProven` (the channel's `siteBinds` plus a
     site claim the relay already held), so even a channel opened without a site claim can't be re-bound.
-  - **Claim rotation survives a page that dies mid-open.** The fresh claim is saved as pending (`sn`) BEFORE its socket
-    opens, since the relay pins it at the upgrade. A reconnect tries `sc`, then the pending claim (never with `wc`),
-    and only then a new fresh claim; whichever opens becomes `sc`.
-  - **Locked out: `REPAIR_NEEDED`, not a retry loop.** When every claim is refused, a throwaway socket on a new random
-    channel checks that the relay answers at all (a refused socket and an unreachable relay look the same to a page).
-    If it does, our claims are tried once more and, if still refused, waiting calls reject with
-    `{ code: 'REPAIR_NEEDED' }` (the code bWalletX already answers with when a pairing has ended), so the site can ask
-    the user to pair again. An unreachable relay keeps the old behaviour: calls wait and the socket is retried.
+  - **Claim rotation survives a page that dies mid-open.** The fresh claim is saved as pending (`sn`, with the time it
+    was written) BEFORE its socket opens, since the relay pins it at the upgrade. A reconnect tries `sc`, then the
+    pending claim (never with `wc`), and only then a new fresh claim; whichever opens becomes `sc`.
+  - **Tabs don't overwrite each other's rotation.** Storage is re-read when a reconnect starts, right before a fresh
+    claim is written (compare-and-set: with localStorage nothing runs between the read and the write), and before any
+    verdict; claims another tab stored are tried first. Another tab's pending claim younger than 30 s is never replaced
+    (its socket is still opening); an older one (that page is gone) may be, so a missing channel is still re-created.
+  - **Locked out: `REPAIR_NEEDED`, not a retry loop.** When every claim is refused, connect asks whether the relay
+    answers at all, with a `no-cors` GET of `https://<relay>/health` (a refused socket and an unreachable relay look the
+    same to a page; any response counts, a network error doesn't). If it answers, our claims are tried once more (and,
+    for v1, one more fresh claim, needed when a dead page's pending claim never reached the relay); if all are still
+    refused, waiting calls reject with `{ code: 'REPAIR_NEEDED' }` and later calls fail at once, with no sockets, until
+    the stored claims change or a socket opens. An unreachable relay (or a page CSP that blocks the fetch) keeps the old
+    behaviour: calls wait and the socket is retried.
+  - **`REPAIR_NEEDED` can now come from connect itself** (the relay refused every claim this pairing holds), not only
+    from the phone (bWalletX answering a call on a pairing it has ended). A site that maps `REPAIR_NEEDED` to "forget
+    the pairing and show the QR" (as tokenblaster does) gets that here too; the stored pairing is not deleted by
+    connect.
   - A stored `wv` other than 2 is ignored (treated as v1) rather than discarding the pairing; so is a malformed `sn`.
-  - Each reconnect starts from the claims in storage (same pairing only), so a tab that loaded before another tab
-    rotated the claim neither presents nor writes back the stale one.
   - Pairing revives (`pairBwalletX` rejoining its own channel) still send no `wc`.
   - Tests: `test/relay-interop.test.ts` runs pairing against a copy of the real relay (`test/fixtures/relay.mjs`, from
     bWalletX 5.2.61) after the cutoff, with a 5.2.61-style phone and an older one: v2 re-creation after the 31-day drop,
@@ -43,10 +51,10 @@ Known gaps (relay behaviour, unchanged here):
   the tab reloads (or the socket otherwise closes and a call reopens it). For a v1 pairing re-created with the QR
   digest, someone who saw the QR could also join in that window and bind their own session claim, locking the phone
   out (the site would then see `REPAIR_NEEDED` only if it loses the site role too; otherwise its calls go unanswered).
-- **Other tabs after a claim rotation.** Each reconnect now starts from the claims in storage, so a tab that loaded
-  before another tab rotated the site claim (the v1 re-create) presents the new claim and never writes the old one
-  back. It still needs a reload to talk to the wallet: open tabs share one pairing's frame counters, so the phone drops
-  the second tab's frames as replays (older than 0.9.2).
+- **Other tabs after a claim rotation.** A tab that loaded before another tab rotated the site claim (the v1
+  re-create) picks up the new claim, but still needs a reload to talk to the wallet: open tabs share one pairing's frame
+  counters, so the phone drops the second tab's frames as replays (older than 0.9.2). An asynchronous `storage` can't
+  give the compare-and-set above; two tabs could then both rotate, and the loser may see `REPAIR_NEEDED`.
 
 ## 0.9.1 (22 Nov 2026)
 

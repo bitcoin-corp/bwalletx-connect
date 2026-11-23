@@ -146,6 +146,8 @@ interface StoredPairing {
    * longer accepts. Tried (without `wc`) after `sc`; becomes `sc` once a socket with it opens.
    */
   sn?: string;
+  /** (0.9.2) When `sn` was written (ms). Another tab's pending claim younger than PENDING_MS is never replaced. */
+  sa?: number;
 }
 
 /** A pairing in progress, saved for the tab the wallet returns to (keyed by the link's one-time `rid`). */
@@ -319,6 +321,8 @@ const CLAIM_RE = /^[A-Za-z0-9_-]{22,64}$/;
 /** (0.9.2) The code bWalletX itself answers with when a pairing has ended; sites already handle it. */
 const REPAIR_NEEDED = 'REPAIR_NEEDED';
 const PROBE_MS = 10_000;
+/** How long another tab's pending claim counts as in flight (its socket opens or fails well within this). */
+const PENDING_MS = 30_000;
 
 function parseStored(raw: string | null): StoredPairing | null {
   if (!raw) return null;
@@ -336,6 +340,7 @@ function parseStored(raw: string | null): StoredPairing | null {
     // pairing; so is a malformed pending claim.
     if (p.wv !== undefined && p.wv !== 2) delete p.wv;
     if (p.sn !== undefined && (typeof p.sn !== 'string' || !CLAIM_RE.test(p.sn))) delete p.sn;
+    if (p.sa !== undefined && !n(p.sa)) delete p.sa;
     return p as StoredPairing;
   } catch {
     return null;
@@ -404,6 +409,13 @@ class Link {
   private opening: Promise<void> | null = null;
   private waiting = new Map<string, Waiting>();
   private forgotten = false;
+  /**
+   * (0.9.2) Set when the relay answered and refused every claim we hold (REPAIR_NEEDED). Calls then fail at once, with
+   * no sockets and no probe, until the stored claims change (another tab rotated or re-paired) or a socket opens.
+   */
+  private ended: { err: Error; sc?: string; sn?: string } | null = null;
+  /** (0.9.2) The pending claim this Link wrote itself (any other stored one came from another tab). */
+  private mine: string | null = null;
   private lastResend = 0;
   private joinTimer: ReturnType<typeof setTimeout> | undefined;
   private reopenTimer: ReturnType<typeof setTimeout> | undefined;
@@ -474,26 +486,58 @@ class Link {
   private async ensure() {
     if (this.forgotten) throw new Error('This pairing was removed. Pair again.');
     if (this.ws && this.ws.readyState === OPEN) return;
+    if (this.ended) {
+      const saved = await this.readStored();
+      if (!saved || (saved.sc === this.ended.sc && saved.sn === this.ended.sn)) throw this.ended.err;
+      this.ended = null; // the stored claims changed since: worth one more try
+    }
     this.opening ??= this.reopen().finally(() => (this.opening = null));
     await this.opening;
   }
 
+  /**
+   * The stored record, if it is still this pairing (same channel and keys). Read synchronously when the storage is
+   * (localStorage), so a read followed by persist() has no await between them.
+   */
+  private readStored(): StoredPairing | null | Promise<StoredPairing | null> {
+    const mine = (raw: string | null) => {
+      const saved = parseStored(raw);
+      return saved && saved.c === this.p.c && saved.s === this.p.s && saved.k === this.p.k ? saved : null;
+    };
+    try {
+      const r = this.storage.getItem(this.key);
+      if (r && typeof (r as Promise<string | null>).then === 'function') return Promise.resolve(r).then(mine, () => null);
+      return mine(r as string | null);
+    } catch {
+      return null;
+    }
+  }
+
+  /** Take the stored claims (another tab may have rotated them, or learned wv). True when sc or sn changed. */
+  private adoptClaims(saved: StoredPairing | null): boolean {
+    if (!saved) return false;
+    const changed = (!!saved.sc && saved.sc !== this.p.sc) || saved.sn !== this.p.sn;
+    const { sn: _sn, sa: _sa, ...mine } = this.p;
+    this.p = {
+      ...mine,
+      sc: saved.sc ?? this.p.sc,
+      ...(saved.sn && { sn: saved.sn, ...(saved.sa !== undefined && { sa: saved.sa }) }),
+      ...((saved.wv === 2 || this.p.wv === 2) && { wv: 2 as const }),
+    };
+    return changed;
+  }
+
   private async reopen() {
     // Another tab of this origin may have rotated the site claim (or learned wv) since we loaded: start from the stored
-    // claims when they are this pairing's, so we neither present a stale claim nor write one back over the new one.
-    const saved = parseStored(await Promise.resolve(this.storage.getItem(this.key)).catch(() => null));
+    // claims, so we neither present a stale claim nor write one back over the new one.
+    this.adoptClaims(await this.readStored());
     if (this.forgotten) throw new Error('This pairing was removed. Pair again.');
-    if (saved && saved.c === this.p.c && saved.s === this.p.s && saved.k === this.p.k) {
-      const { sn: _sn, ...mine } = this.p;
-      this.p = { ...mine, sc: saved.sc ?? this.p.sc, ...(saved.sn && { sn: saved.sn }), ...((saved.wv === 2 || this.p.wv === 2) && { wv: 2 as const }) };
-    }
     // Pairings stored before site claims get one now; the relay binds it on this connect.
     if (!this.p.sc) {
       this.p = { ...this.p, sc: newClaim() };
       this.persist();
     }
     const key = PrivateKey.fromHex(this.p.s);
-    const v2 = this.p.wv === 2;
     // Wallet claim v2 (0.9.2): always name the session claim's digest. On a live channel already bound to it the relay
     // changes nothing; a channel it lost (31-day idle drop, lost state file) is re-created bound to it, so only the
     // paired phone gets the wallet role. After the relay's legacy cutoff (30 Nov 2026) a channel can't be re-created
@@ -501,9 +545,13 @@ class Link {
     // A v1 pairing (stored before 0.9.2, or the wallet never named its session claim) opens WITHOUT `wc`: the QR-bound
     // claim's digest must never reach a live channel, or the relay would re-bind a session-bound wallet role back to it
     // and anyone who saw the QR could then evict the phone.
-    const wc = v2 ? await claimDigest(sessionWalletClaim(key, this.p.k, this.p.c)) : undefined;
+    const v2 = () => this.p.wv === 2;
+    const scWc = async () => (v2() ? claimDigest(sessionWalletClaim(key, this.p.k, this.p.c)) : undefined);
+    const tried = new Set<string>();
+    let othersInFlight = false;
     const attempt = async (claim: string, withWc?: string) => {
       if (this.forgotten) throw new Error('This pairing was removed. Pair again.');
+      tried.add(claim);
       try {
         await this.openSite(claim, withWc, () => this.useClaim(claim));
         return true;
@@ -511,6 +559,11 @@ class Link {
         if (this.forgotten) throw new Error('This pairing was removed. Pair again.');
         return false;
       }
+    };
+    /** Claims another tab stored that this reopen hasn't tried yet: sc (with its wc), then the pending one (never wc). */
+    const tryAdopted = async () => {
+      if (this.p.sc && !tried.has(this.p.sc) && (await attempt(this.p.sc, await scWc()))) return true;
+      return !!this.p.sn && !tried.has(this.p.sn) && (await attempt(this.p.sn));
     };
     // v1 only: re-create the channel bound to the QR claim, the only wallet claim a v1 pairing knows, under a FRESH site
     // claim. That is safe on a channel that still exists, because of two relay checks (relay.mjs claimOk and attach):
@@ -521,70 +574,82 @@ class Link {
     // the socket opens (review of #24, finding 1): the relay pins it at the upgrade, and a page that dies before onopen
     // must still be able to come back with it.
     const fresh = async () => {
+      // Compare-and-set (re-check of #24): if another tab stored a different claim or its own pending claim, use those
+      // rather than writing ours over them. With localStorage (synchronous) nothing runs between this read and the
+      // write below; an asynchronous storage can't promise that.
+      const peek = this.readStored();
+      const saved = peek instanceof Promise ? await peek : peek;
+      if (this.adoptClaims(saved)) return tryAdopted();
+      // A pending claim we didn't write is another tab's rotation: while it may still be in flight, don't race it.
+      if (this.p.sn && this.p.sn !== this.mine && Date.now() - (this.p.sa ?? 0) < PENDING_MS) {
+        othersInFlight = true;
+        return false;
+      }
       const sn = newClaim();
-      this.p = { ...this.p, sn };
+      this.mine = sn;
+      this.p = { ...this.p, sn, sa: Date.now() };
       this.persist();
       const qr = await claimDigest(await walletClaimFor(this.p.c, key.toPublicKey().toString()));
       return attempt(sn, qr);
     };
 
-    if (await attempt(this.p.sc!, wc)) return;
+    if (await attempt(this.p.sc!, await scWc())) return;
     const pending = this.p.sn;
     // A pending claim from a retry whose socket we never saw open: the relay may hold it. Never with `wc`.
     if (pending && (await attempt(pending))) return;
     // No pending claim to lose, so a new one can't strand one the relay pinned.
-    if (!v2 && !pending && (await fresh())) return;
+    if (!v2() && !pending && (await fresh())) return;
     // Everything was refused, or the relay can't be reached: a browser can't tell which (both are a 1006 close). Only a
     // relay that answers makes a refusal mean anything; until then the calls wait and the socket is retried as before.
     if (!(await this.relayAnswers())) throw new Error('Could not reach the bWalletX pairing service');
-    if (await attempt(this.p.sc!, wc)) return; // the first refusal may have been a blip
+    if (await attempt(this.p.sc!, await scWc())) return; // the first refusal may have been a blip
     if (this.p.sn && (await attempt(this.p.sn))) return;
-    // The pending claim was refused by a relay that answers, so it holds nothing: a fresh one may replace it.
-    if (!v2 && (await fresh())) return;
+    // Kept (re-check of #24, finding 4 asked): the pending claim was just refused by a relay that answers, so it holds
+    // nothing, and without this a channel that is still missing could never be re-created once a pending claim exists
+    // (a page that died before its retry reached the relay, or a blip on that retry): the first branch above skips
+    // fresh() whenever a pending claim exists. The only way to strand a pinned claim here is a second blip on the
+    // pending attempt right after the relay answered; that ends in REPAIR_NEEDED, not a hijack.
+    if (!v2() && (await fresh())) return;
+    // Before the verdict: another tab may have rotated the claim while we tried (re-check of #24).
+    if (this.adoptClaims(await this.readStored()) && (await tryAdopted())) return;
+    // Another tab's rotation may still land: not a verdict yet. The calls wait and the socket is retried shortly.
+    if (othersInFlight) throw new Error('Could not reach the bWalletX pairing service');
     // The relay answers and refuses every claim we have: the channel is someone else's now. Say so (the same code
     // bWalletX answers with when a pairing has ended), instead of "Could not reach…" on every retry for ever.
     const err = Object.assign(new Error('This pairing has ended. Pair with bWalletX again.'), { code: REPAIR_NEEDED });
+    this.ended = { err, sc: this.p.sc, sn: this.p.sn };
     this.failAll(err);
     throw err;
   }
 
   /** The claim a socket just opened with is ours from now on; a pending one is no longer needed. */
   private useClaim(claim: string) {
+    this.ended = null;
+    this.mine = null;
     if (this.p.sc === claim && this.p.sn === undefined) return;
-    const { sn: _sn, ...rest } = this.p;
+    const { sn: _sn, sa: _sa, ...rest } = this.p;
     this.p = { ...rest, sc: claim };
     this.persist();
   }
 
   /**
-   * Does the relay answer at all? Opens a site socket on a new, random channel (it is never used, and the relay drops
-   * it within minutes) and closes it. Only asked after every claim was refused.
+   * Does the relay answer at all? A no-cors GET of its /health (relay server.mjs, same host): any response means it
+   * answers, a network error (or no answer in 10 s) means it doesn't. No channel is opened. Where fetch is missing or
+   * blocked (a page CSP that allows only the wss: relay), it counts as not answering: the old wait-and-retry.
    */
   private async relayAnswers(): Promise<boolean> {
-    const e = Math.floor(Date.now() / 1000) + QR_LIFETIME_S - 10;
-    const url = relaySocketUrl(this.p.r, newChannel(), 'site', e, newClaim(), await claimDigest(newClaim()));
-    return new Promise<boolean>((resolve) => {
-      let ws: SocketLike;
-      const done = (ok: boolean) => {
-        clearTimeout(timer);
-        ws.onopen = ws.onerror = ws.onclose = null;
-        try {
-          ws.close();
-        } catch {
-          /* already closed */
-        }
-        resolve(ok);
-      };
-      try {
-        ws = this.socket(url);
-      } catch {
-        return resolve(false);
-      }
-      const timer = setTimeout(() => done(false), PROBE_MS);
-      ws.onopen = () => done(true);
-      ws.onerror = () => done(false);
-      ws.onclose = () => done(false);
-    });
+    if (typeof fetch !== 'function') return false;
+    const local = /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(this.p.r);
+    const ctl = typeof AbortController === 'function' ? new AbortController() : undefined;
+    const timer = setTimeout(() => ctl?.abort(), PROBE_MS);
+    try {
+      await fetch(`${local ? 'http' : 'https'}://${this.p.r}/health`, { mode: 'no-cors', cache: 'no-store', credentials: 'omit', signal: ctl?.signal });
+      return true;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private openSite(sc: string, wc?: string, onOpen?: () => void) {
@@ -699,6 +764,16 @@ class Link {
           this.waiting.delete(id);
         }
         throw e;
+      }
+      // (0.9.2) REPAIR_NEEDED: this call fails now (it was failed already if it was the one that found out).
+      if (this.ended && e === this.ended.err) {
+        const w = this.waiting.get(id);
+        if (w) {
+          clearTimeout(w.timer);
+          this.waiting.delete(id);
+          w.reject(this.ended.err);
+        }
+        return result;
       }
       if (visible()) this.later();
     }

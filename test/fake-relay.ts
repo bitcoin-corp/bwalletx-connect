@@ -75,7 +75,9 @@ export class FakeSocket implements SocketLike {
     this.onmessage?.({ data });
   }
   send(data: string) {
-    if (this.readyState !== 1) throw new Error('not open');
+    // As browsers: a send while connecting throws; on a closed socket the frame is dropped silently.
+    if (this.readyState === 0) throw new Error('not open');
+    if (this.readyState !== 1) return;
     const p = this.relay.peer(this);
     // Delivered synchronously, back to back, as a fast network can.
     if (p && p.readyState === 1) p.deliver(data);

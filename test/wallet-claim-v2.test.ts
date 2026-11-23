@@ -5,7 +5,7 @@
  * live channel. These run against the fake relay; test/relay-interop.test.ts runs the same flows against the real one.
  */
 import { PrivateKey } from '@bsv/sdk';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { pairBwalletX, restorePairing, resumeReturnedPairing, type PairStorage, type SocketFactory } from '../src/pair';
 import { DEFAULT_RELAY, claimDigest, parsePairUrl, relaySocketUrl, sessionWalletClaim, walletClaimFor } from '../src/protocol';
 import { FakeRelay, type FakeSocket } from './fake-relay';
@@ -55,6 +55,41 @@ async function pair(relay: FakeRelay, storage = mapStorage(), opts: FakePhoneOpt
     onLink: (link) => setTimeout(() => (phone = fakePhone(link, relay.socket, PrivateKey.fromRandom(), opts)), 0),
   });
   return { wallet, phone: phone!, storage };
+}
+
+/**
+ * The reachability check (pair.ts relayAnswers) fetches https://<relay>/health. Never the network here: by default the
+ * relay doesn't answer; a test sets `answers` to make it.
+ */
+const health = { answers: false, calls: [] as { url: string; init?: RequestInit }[] };
+beforeEach(() => {
+  health.answers = false;
+  health.calls = [];
+  vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+    health.calls.push({ url, init });
+    if (!health.answers) throw new TypeError('Failed to fetch');
+    return new Response(null, { status: 200 });
+  });
+});
+afterEach(() => vi.unstubAllGlobals());
+
+/**
+ * The relay's site-role rules for one channel, after the cutoff (relay.mjs admit/attach): a missing channel is created
+ * only by a site that sends `wc`, and its claim is pinned at the upgrade; after that only that claim gets in.
+ */
+function channelModel(relay: FakeRelay, c: string) {
+  const m = { owner: null as string | null };
+  const socket = refusing(relay, (q, url) => {
+    if (!new URL(url).pathname.endsWith(`/${c}`) || q.get('role') !== 'site') return false;
+    const claim = q.get('claim');
+    if (m.owner === null) {
+      if (!q.get('wc') || !claim) return true; // "wallet binding required"
+      m.owner = claim;
+      return false;
+    }
+    return claim !== m.owner; // "role claimed"
+  });
+  return { m, socket };
 }
 
 describe('wallet claim v2: the shared claim', () => {
@@ -250,17 +285,120 @@ describe('wallet claim v2: v1 pairings reconnect without the QR digest', () => {
     const { c } = stored(storage);
     wallet.close();
     const before = relay.urls.length;
-    // Our channel refuses everything; a probe on any other channel opens (the relay is reachable).
+    // Our channel refuses everything, and the relay answers /health.
+    health.answers = true;
     const lockedOut = refusing(relay, (_q, url) => new URL(url).pathname.endsWith(`/${c}`));
     const again = await restorePairing({ storage, socket: lockedOut, callTimeoutMs: 60_000 });
     await expect(again!.getPublicKey({ identityKey: true })).rejects.toMatchObject({ code: 'REPAIR_NEEDED' });
     const tried = siteUrlsOn(relay, c, before);
-    // sc, fresh (QR wc), then once the probe opened: sc, the pending claim (no wc), one more fresh (QR wc).
+    // sc, fresh (QR wc), then once /health answered: sc, the pending claim (no wc), one more fresh (QR wc).
     expect(tried.map((q) => !!q.get('wc'))).toEqual([false, true, false, false, true]);
-    expect(relay.urls.slice(before).filter((u) => !u.includes(`/${c}?`))).toHaveLength(1); // the probe
+    expect(relay.urls.slice(before).filter((u) => !u.includes(`/${c}?`))).toEqual([]); // no probe channel
+    expect(health.calls).toHaveLength(1);
+    expect(health.calls[0].url).toBe('https://relay.bwallet.space/health');
+    expect(health.calls[0].init).toMatchObject({ mode: 'no-cors', credentials: 'omit' });
     await tick(1500);
     expect(siteUrlsOn(relay, c, before)).toHaveLength(5); // nothing more: no loop
+    // Later calls fail at once (re-check of #24): no sockets, no /health.
+    await expect(again!.getPublicKey({ identityKey: true })).rejects.toMatchObject({ code: 'REPAIR_NEEDED' });
+    expect(siteUrlsOn(relay, c, before)).toHaveLength(5);
+    expect(health.calls).toHaveLength(1);
     expect(await restorePairing({ storage, socket: relay.socket })).not.toBeNull(); // the record is kept
+  });
+
+  it('after REPAIR_NEEDED, a change to the stored claims (another tab) is worth one more try', async () => {
+    const relay = new FakeRelay(ORIGIN);
+    const { wallet, storage } = await pair(relay);
+    const { c } = stored(storage);
+    wallet.close();
+    health.answers = true;
+    let lockedOut = true;
+    const again = await restorePairing({ storage, socket: refusing(relay, (_q, url) => lockedOut && new URL(url).pathname.endsWith(`/${c}`)), callTimeoutMs: 2000 });
+    await expect(again!.getPublicKey({ identityKey: true })).rejects.toMatchObject({ code: 'REPAIR_NEEDED' });
+    // Another tab got back in under a claim it stored.
+    lockedOut = false;
+    storage.m.set(KEY, JSON.stringify({ ...stored(storage), sc: 'otherTabOtherTabOtherT', sn: undefined }));
+    const before = relay.urls.length;
+    await again!.getPublicKey({ identityKey: true });
+    expect(siteUrlsOn(relay, c, before)[0].get('claim')).toBe('otherTabOtherTabOtherT');
+  });
+
+  it('two tabs hit the missing channel at once: one creates it, the other uses its claim; no false REPAIR_NEEDED', async () => {
+    const relay = new FakeRelay(ORIGIN);
+    const { wallet, storage } = await pair(relay);
+    const { c, sc: oldSc } = stored(storage);
+    wallet.close();
+    health.answers = true;
+    const model = channelModel(relay, c);
+    const before = relay.urls.length;
+    // Both tabs loaded the same record; the relay has lost the channel.
+    const tabA = await restorePairing({ storage, socket: model.socket, callTimeoutMs: 600 });
+    const tabB = await restorePairing({ storage, socket: model.socket, callTimeoutMs: 600 });
+    const outcomes = await Promise.all(
+      [tabA!, tabB!].map((t) =>
+        t.getPublicKey({ identityKey: true }).then(
+          () => 'answered',
+          (e: { code?: string }) => e.code,
+        ),
+      ),
+    );
+    // (Two live tabs share the frame counters, so the phone may answer only one: NO_ANSWER is fine, REPAIR_NEEDED isn't.)
+    expect(outcomes).not.toContain('REPAIR_NEEDED');
+    expect(outcomes).toContain('answered');
+    // Compare-and-set: only one tab rotated (one QR-digest socket); the other took that tab's pending claim.
+    expect(siteUrlsOn(relay, c, before).filter((q) => q.get('wc'))).toHaveLength(1);
+    // The record holds the claim the relay pinned, with nothing pending: neither tab wrote over the other.
+    expect(model.m.owner).not.toBe(oldSc);
+    expect(stored(storage).sc).toBe(model.m.owner);
+    expect(stored(storage).sn).toBeUndefined();
+    // And a fresh page load gets straight in with it.
+    const tabC = await restorePairing({ storage, socket: model.socket, callTimeoutMs: 600 });
+    const later = relay.urls.length;
+    await tabC!.getPublicKey({ identityKey: true }).catch(() => {});
+    expect(siteUrlsOn(relay, c, later).map((q) => q.get('claim'))).toEqual([model.m.owner]);
+  });
+
+  it("a dead page's pending claim that never reached the relay: replaced once it is 30 s old, and the channel re-created", async () => {
+    const relay = new FakeRelay(ORIGIN);
+    const { wallet, storage } = await pair(relay);
+    const { c } = stored(storage);
+    wallet.close();
+    health.answers = true;
+    // Young (another tab may still be opening with it): not raced, and not a REPAIR_NEEDED verdict either.
+    storage.m.set(KEY, JSON.stringify({ ...stored(storage), sn: 'deadPageDeadPageDeadPa', sa: Date.now() }));
+    const young = channelModel(relay, c);
+    let before = relay.urls.length;
+    const t1 = await restorePairing({ storage, socket: young.socket, callTimeoutMs: 400 });
+    await expect(t1!.getPublicKey({ identityKey: true })).rejects.toMatchObject({ code: 'NO_ANSWER' });
+    expect(siteUrlsOn(relay, c, before).filter((q) => q.get('wc'))).toEqual([]);
+    expect(stored(storage).sn).toBe('deadPageDeadPageDeadPa');
+    t1!.close();
+    // Old: the page that wrote it is gone. One fresh claim (QR digest) re-creates the channel.
+    storage.m.set(KEY, JSON.stringify({ ...stored(storage), sa: Date.now() - 60_000 }));
+    const old = channelModel(relay, c);
+    before = relay.urls.length;
+    const t2 = await restorePairing({ storage, socket: old.socket, callTimeoutMs: 2000 });
+    await t2!.getPublicKey({ identityKey: true });
+    expect(siteUrlsOn(relay, c, before).filter((q) => q.get('wc'))).toHaveLength(1);
+    expect(stored(storage).sc).toBe(old.m.owner);
+    expect(stored(storage).sn).toBeUndefined();
+  });
+
+  it('a claim another tab stores while we try is used before the REPAIR_NEEDED verdict', async () => {
+    const relay = new FakeRelay(ORIGIN);
+    const { wallet, storage } = await pair(relay, undefined, { v2: true }); // v2: no fresh claim of our own to try
+    const { c, sc } = stored(storage);
+    wallet.close();
+    const tab = await restorePairing({ storage, socket: refusing(relay, (q, url) => new URL(url).pathname.endsWith(`/${c}`) && q.get('claim') !== 'otherTabOtherTabOtherT'), callTimeoutMs: 2000 });
+    // Our claim is refused; while we check /health, another tab gets in under its own claim and stores it.
+    health.answers = true;
+    vi.stubGlobal('fetch', async () => {
+      storage.m.set(KEY, JSON.stringify({ ...stored(storage), sc: 'otherTabOtherTabOtherT' }));
+      return new Response(null, { status: 200 });
+    });
+    const before = relay.urls.length;
+    await tab!.getPublicKey({ identityKey: true });
+    expect(siteUrlsOn(relay, c, before).map((q) => q.get('claim'))).toEqual([sc, sc, 'otherTabOtherTabOtherT']);
   });
 
   it('refused twice: the site claim is kept, and nothing more is tried for that call', async () => {
@@ -271,7 +409,7 @@ describe('wallet claim v2: v1 pairings reconnect without the QR digest', () => {
     relay.refuse = true;
     const before = relay.urls.length;
     const again = await restorePairing({ storage, socket: relay.socket, callTimeoutMs: 300 });
-    // Unreachable (the probe fails too): not REPAIR_NEEDED, the call just gets no answer.
+    // Unreachable (/health fails too): not REPAIR_NEEDED, the call just gets no answer.
     await expect(again!.getPublicKey({ identityKey: true })).rejects.toMatchObject({ code: 'NO_ANSWER' });
     const opened = siteUrlsOn(relay, stored(storage).c, before); // refused sockets are recorded too
     expect(opened).toHaveLength(2);
