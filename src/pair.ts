@@ -18,6 +18,7 @@ import {
   pairUrl,
   parseReturnFragment,
   relaySocketUrl,
+  sessionWalletClaim,
   walletClaimFor,
   type BrowserHint,
   type HelloFrame,
@@ -134,6 +135,11 @@ interface StoredPairing {
   lastSeen: number;
   pairedAt: number;
   sc?: string; // our relay site claim, sent on every connect. Pairings stored before 0.5.4 get one on reconnect.
+  /**
+   * (0.9.2) Wallet claim v2: the wallet's sealed `ready` named its session claim (checked against our own derivation),
+   * so every reconnect sends that claim's digest as `wc` and a channel the relay re-creates stays bound to the phone.
+   */
+  wv?: 2;
 }
 
 /** A pairing in progress, saved for the tab the wallet returns to (keyed by the link's one-time `rid`). */
@@ -314,9 +320,24 @@ function parseStored(raw: string | null): StoredPairing | null {
     if (typeof p.k !== 'string' || !/^0[23][0-9a-f]{64}$/i.test(p.k)) return null;
     if (!n(p.sent) || !n(p.lastSeen) || !n(p.pairedAt)) return null;
     if (p.sc !== undefined && (typeof p.sc !== 'string' || !/^[A-Za-z0-9_-]{22,64}$/.test(p.sc))) return null;
+    if (p.wv !== undefined && p.wv !== 2) return null;
     return p as StoredPairing;
   } catch {
     return null;
+  }
+}
+
+/**
+ * (0.9.2) A wallet `ready` with `wcv: 2` names its session claim's digest (`nc`). True only when that matches the claim
+ * we derive ourselves from our pairing key and the wallet's. Only ever asked of a SEALED ready: the plaintext hello's
+ * `wcv` is never trusted (anyone on the relay path could add it).
+ */
+async function readySaysV2(msg: PairMessage, mine: PrivateKey, walletKey: string, channel: string): Promise<boolean> {
+  if (msg.t !== 'ready' || msg.wcv !== 2 || typeof msg.nc !== 'string') return false;
+  try {
+    return msg.nc === (await claimDigest(sessionWalletClaim(mine, walletKey, channel)));
+  } catch {
+    return false;
   }
 }
 
@@ -442,17 +463,49 @@ class Link {
     await this.opening;
   }
 
-  private reopen() {
+  private async reopen() {
     // Pairings stored before site claims get one now; the relay binds it on this connect.
     if (!this.p.sc) {
       this.p = { ...this.p, sc: newClaim() };
       this.persist();
     }
+    const key = PrivateKey.fromHex(this.p.s);
+    if (this.p.wv === 2) {
+      // Wallet claim v2 (0.9.2): always name the session claim's digest. On a live channel already bound to it the
+      // relay changes nothing; a channel it lost (31-day idle drop, lost state file) is re-created bound to it, so
+      // only the paired phone gets the wallet role. After the relay's legacy cutoff (30 Nov 2026) a channel can't be
+      // re-created without `wc` at all.
+      const wc = await claimDigest(sessionWalletClaim(key, this.p.k, this.p.c));
+      return this.openSite(this.p.sc!, wc);
+    }
+    // A v1 pairing (stored before 0.9.2, or the wallet never named its session claim): open WITHOUT `wc` first. The
+    // QR-bound claim's digest must never reach a live channel: the relay would re-bind a session-bound wallet role
+    // back to it, and anyone who saw the QR could then evict the phone.
+    try {
+      return await this.openSite(this.p.sc!);
+    } catch (e) {
+      if (this.forgotten) throw e;
+      // Refused (a browser can't say why). Once, re-create the channel bound to the QR claim, the only wallet claim a
+      // v1 pairing knows, under a FRESH site claim: if the channel does exist, the relay refuses that claim ("role
+      // claimed") before it looks at `wc`, so the QR digest can only ever open a channel the relay no longer has. The
+      // new claim replaces ours only once that socket is open.
+      const sc = newClaim();
+      const wc = await claimDigest(await walletClaimFor(this.p.c, key.toPublicKey().toString()));
+      if (this.forgotten) throw e;
+      return this.openSite(sc, wc, () => {
+        this.p = { ...this.p, sc };
+        this.persist();
+      });
+    }
+  }
+
+  private openSite(sc: string, wc?: string, onOpen?: () => void) {
     // A fresh expiry lets the relay recreate the channel if it was dropped; the wallet rejoins on its own.
     const e = Math.floor(Date.now() / 1000) + QR_LIFETIME_S - 10;
-    const ws = this.socket(relaySocketUrl(this.p.r, this.p.c, 'site', e, this.p.sc));
+    const ws = this.socket(relaySocketUrl(this.p.r, this.p.c, 'site', e, sc, wc));
     return new Promise<void>((resolve, reject) => {
       ws.onopen = () => {
+        onOpen?.();
         this.ws = ws;
         this.wire(ws);
         resolve();
@@ -496,6 +549,13 @@ class Link {
       // (bWalletX answers a repeated id from its stored answer; it never runs a request twice).
       clearTimeout(this.joinTimer);
       void this.resend();
+      // (0.9.2) A v1 pairing upgrades here: the wallet's sealed ready names its session claim (bWalletX 5.2.61+ does on
+      // every rejoin). From now on every reconnect sends its digest as `wc`, which also re-binds the wallet role to it
+      // on a channel still bound to the QR claim (the relay accepts that from the site claim that opened the channel).
+      if (this.p.wv !== 2 && (await readySaysV2(msg, PrivateKey.fromHex(this.p.s), this.p.k, this.p.c)) && !this.forgotten) {
+        this.p = { ...this.p, wv: 2 };
+        this.persist();
+      }
     } else if (msg.t === 'close') {
       this.drop();
       this.failAll(new Error('bWalletX disconnected this site. Pair again.'));
@@ -731,8 +791,11 @@ export function pairBwalletX(opts: PairingOptions): Promise<PairedWallet> {
         await dropPending(returns, rid);
       }
       if (settled) return;
+      // (0.9.2) Wallet claim v2: only from the SEALED ready's `nc`, checked against our own derivation.
+      const v2 = await readySaysV2(msg, siteKey, walletKey, channel);
+      if (settled) return;
       done();
-      const p: StoredPairing = { v: 1, c: channel, r: relay, s: siteKey.toHex(), k: walletKey, ...sealer.counters, pairedAt: Date.now(), sc: siteClaim };
+      const p: StoredPairing = { v: 1, c: channel, r: relay, s: siteKey.toHex(), k: walletKey, ...sealer.counters, pairedAt: Date.now(), sc: siteClaim, ...(v2 && { wv: 2 as const }) };
       await Promise.resolve(storage.setItem(key, JSON.stringify(p))).catch(() => {});
       const link = new Link(p, sealer, storage, key, socket, opts.callTimeoutMs ?? 120_000, wake);
       if (sock && sock.readyState === OPEN) link.adopt(sock);
@@ -966,7 +1029,9 @@ export async function resumeReturnedPairing(opts: ResumeOptions = {}): Promise<R
   const again = await readPending(returns, frag.rid);
   if (!again || again.taken) return null;
   await dropPending(returns, frag.rid); // taken: the entry (it holds the site's pairing key) goes
-  const stored: StoredPairing = { v: 1, c: p.c, r: p.r, s: p.s, k: got.wk, ...got.sealer.counters, pairedAt: Date.now(), sc: p.sc };
+  // (0.9.2) Wallet claim v2: only from the sealed ready's `nc` (the fragment's or the relay's), checked against our own.
+  const v2 = await readySaysV2(got.msg, S, got.wk, p.c);
+  const stored: StoredPairing = { v: 1, c: p.c, r: p.r, s: p.s, k: got.wk, ...got.sealer.counters, pairedAt: Date.now(), sc: p.sc, ...(v2 && { wv: 2 as const }) };
   await Promise.resolve(storage.setItem(key, JSON.stringify(stored))).catch(() => {});
   const login = foldedFrom(got.msg.login, p.ln) ?? null;
   const link = new Link(stored, got.sealer, storage, key, socket, opts.callTimeoutMs ?? 120_000, opts.onWake ?? onPageWake);

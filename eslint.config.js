@@ -2,7 +2,8 @@ import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist', 'node_modules', 'examples', 'docs'] },
+  // test/fixtures holds a verbatim copy of the bWalletX relay (linted in its own repo).
+  { ignores: ['dist', 'node_modules', 'examples', 'docs', 'test/fixtures/*.mjs'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
