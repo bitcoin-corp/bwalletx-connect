@@ -13,6 +13,11 @@ function mount(attrs: Record<string, string> = {}): El {
 }
 const text = (el: El) => el.shadowRoot!.textContent!.replace(/\s+/g, ' ');
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
+/** Waits for a condition instead of a fixed time: a fixed tick flaked under CI load (v0.9.2 publish run). */
+const until = async (ok: () => boolean, ms = 3000) => {
+  const end = Date.now() + ms;
+  while (!ok() && Date.now() < end) await tick(10);
+};
 
 beforeAll(() => { defineBwalletxSignin(); });
 afterEach(() => { document.body.innerHTML = ''; vi.restoreAllMocks(); });
@@ -91,7 +96,7 @@ describe('<bwalletx-signin> events', () => {
     const nf = vi.fn();
     el.addEventListener('bwalletx-not-found', nf);
     el.button.click();
-    await tick(80);
+    await until(() => nf.mock.calls.length > 0);
     expect(nf).toHaveBeenCalledTimes(1);
     const link = el.shadowRoot!.querySelector<HTMLAnchorElement>('.nf a')!;
     expect(link.textContent).toBe('Get bWalletX');
